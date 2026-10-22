@@ -1,0 +1,18 @@
+{
+  "name": "scolaria",
+  "version": "1.0.0",
+  "description": "Gestion scolaire en français (Google Apps Script + Google Sheets + React)",
+  "private": true,
+  "scripts": {
+    "vendor": "node scripts/vendor.js",
+    "build": "python3 build.py",
+    "test:backend": "node tests/backend.test.js",
+    "test:ui": "python3 tests/ui_smoke.py && python3 tests/ui_flows.py && python3 tests/ui_gas.py",
+    "test": "npm run vendor && npm run build && npm run test:backend && npm run test:ui"
+  },
+  "devDependencies": {
+    "htm": "3.1.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  }
+}
