@@ -1,0 +1,8 @@
+node_modules/
+vendor/
+__pycache__/
+.DS_Store
+# Fichiers de build temporaires ou réservés aux tests
+dist/test.html
+dist/*.check.js
+dist/*.zip
