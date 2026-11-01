@@ -12,7 +12,7 @@ with sync_playwright() as p:
     pg.on('console', lambda m: errors.append('CONSOLE.' + m.type + ': ' + m.text) if m.type in ('error',) else None)
     pg.goto(TEST_URL); pg.wait_for_selector('.shell', timeout=8000)
     print('Titre:', pg.title(), '| page initiale:', pg.inner_text('.crumbs strong'))
-    roles = ['admin', 'secretaire', 'surveillant', 'enseignant', 'eleve', 'parent']
+    roles = ['admin', 'secretaire', 'surveillant', 'enseignant', 'eleve', 'parent', 'candidat']
     report = {}
     for role in roles:
         pg.select_option('#role-switch', role); pg.wait_for_timeout(150)

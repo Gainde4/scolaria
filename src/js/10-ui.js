@@ -41,7 +41,11 @@ function Icon({ n, s = 18 }) {
 }
 const Btn = ({ children, tone, sm, icon, ...p }) => html`<button type="button" className=${'btn' + (tone ? ' ' + tone : '') + (sm ? ' sm' : '')} ...${p}>${icon && html`<${Icon} n=${icon} s=${sm ? 15 : 17} />`}${children}</button>`;
 const Badge = ({ tone = 'mute', children }) => html`<span className=${'badge ' + tone}>${children}</span>`;
-const PageHead = ({ title, sub, children }) => html`<header className="page-head"><div><h1>${title}</h1>${sub && html`<p className="sub">${sub}</p>`}</div><div className="head-actions">${children}</div></header>`;
+function PageHead({ title, sub, children }) {
+  const app = useContext(Ctx), row = app && app.cur && app.cur !== 'home' ? (app.db.modules.find(x => x.id === app.cur) || {}) : {};
+  const t = row.label || title, d = row.sub || sub;
+  return html`<header className="page-head"><div><h1>${t}</h1>${d && html`<p className="sub">${d}</p>`}</div><div className="head-actions">${children}</div></header>`;
+}
 const Empty = ({ icon = 'file', title, children }) => html`<div className="empty"><${Icon} n=${icon} s=${28} /><strong>${title}</strong><span>${children}</span></div>`;
 const Kpi = ({ l, v, sub, tone, icon }) => html`<div className=${'kpi ' + (tone || '')}><div className="kpi-top"><span>${l}</span>${icon && html`<${Icon} n=${icon} s=${16} />`}</div><strong className="mono">${v}</strong>${sub && html`<small>${sub}</small>`}</div>`;
 
@@ -68,6 +72,7 @@ function Field({ f, values, set, db, error }) {
     let o;
     if (f.t === 'ref') o = db[f.ref].filter(r => !f.fl || f.fl(r, values, db)).map(r => ({ v: r.id, l: LABEL[f.ref](r, db) })).sort((a, b) => a.l.localeCompare(b.l, 'fr'));
     else o = (typeof f.o === 'function' ? f.o(values, db) : f.o).map(x => typeof x === 'string' ? { v: x, l: x } : x);
+    if (v && !o.some(x => x.v === v)) o = [{ v, l: v }, ...o];       // une valeur qui n'est plus dans la liste (liste modifiée) reste visible
     input = html`<select ...${c} value=${v ?? ''} onChange=${e => set(f.k, e.target.value)}><option value="">—</option>${o.map(x => html`<option key=${x.v} value=${x.v}>${x.l}</option>`)}</select>`;
   }
   else if (f.t === 'bool') input = html`<label className="check"><input ...${c} type="checkbox" checked=${!!v} onChange=${e => set(f.k, e.target.checked)} /> <span>${f.cl || 'Oui'}</span></label>`;

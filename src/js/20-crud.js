@@ -7,7 +7,7 @@ const PHONE = v => v && !/^(70|75|76|77|78|33|30)[ .]?\d{3}[ .]?\d{2}[ .]?\d{2}$
 const daysTo = d => Math.round((new Date(d + 'T12:00:00') - new Date(todayStr() + 'T12:00:00')) / 864e5);
 const yearOf = db => ((db.settings[0] || {}).annee || '').slice(0, 4) || String(new Date().getFullYear());
 const nextSeq = (rows, key) => rows.reduce((m, r) => { const x = /(\d+)$/.exec(r[key] || ''); return x ? Math.max(m, +x[1]) : m; }, 0) + 1;
-const nextAdmission = db => 'ADM-' + yearOf(db) + '-' + pad(nextSeq(db.students, 'admission'));
+const nextAdmission = db => nextAdmission_(db);
 const nextReceipt = db => 'REC-' + yearOf(db) + '-' + pad(nextSeq(db.payments, 'recu'), 4);
 const stockQty = (db, s) => s.initial + db.stockTx.filter(t => t.itemId === s.id).reduce((a, t) => a + (t.type === 'Entrée' ? t.quantite : -t.quantite), 0);
 const SLA = { Urgente: 4, Haute: 24, Normale: 72, Basse: 168 };
@@ -23,6 +23,20 @@ function expInfo(d) {
   if (n < 0) return { txt: 'Expiré depuis ' + (-n) + ' j', tone: 'bad' };
   return n <= 30 ? { txt: 'Expire dans ' + n + ' j', tone: 'warn' } : { txt: fmtDate(d), tone: 'ok' };
 }
+/* Listes de choix modifiables depuis « Modules » */
+const LISTF = key => (v, db) => listOf_(db, key), LISTD = key => db => listOf_(db, key);
+/* Champs personnalisés : stockés en JSON dans la colonne « extra » ; dans les formulaires, ils s'appellent x_<clé> */
+function custFields(db, key) {
+  return customDefs_(db, key).map(d => ({ k: 'x_' + d.k, l: d.l, t: d.t === 'text' ? undefined : d.t, o: d.o || [], req: d.req && d.t !== 'bool', cl: 'Oui', w: d.t === 'area' ? 'full' : undefined, custom: true }));
+}
+const unpackExtra = (row, db, key) => { const x = parseJson_(row.extra, {}), o = {}; customDefs_(db, key).forEach(d => { o['x_' + d.k] = x[d.k] === undefined ? (d.t === 'bool' ? false : '') : x[d.k]; }); return o; };
+function packExtra(v, db, key) {
+  const raw = {}; customDefs_(db, key).forEach(d => { raw[d.k] = v['x_' + d.k]; });
+  const out = { ...v }; Object.keys(out).forEach(k => { if (k.indexOf('x_') === 0) delete out[k]; });
+  if (TYPES[key] && TYPES[key].extra !== undefined) out.extra = cleanExtra_(customDefs_(db, key), raw);
+  return out;
+}
+const customCols = (db, key) => customDefs_(db, key).filter(d => d.liste).map(d => ({ l: d.l, v: r => { const x = parseJson_(r.extra, {})[d.k]; return x === undefined || x === '' ? '' : d.t === 'bool' ? (x ? 'Oui' : 'Non') : d.t === 'date' ? fmtDate(x) : x; } }));
 const teacherOptions = db => db.teachers.map(t => ({ v: t.id, l: fullName(t) }));
 
 function colFromField(f, db) {
@@ -35,34 +49,36 @@ function colFromField(f, db) {
 
 function CrudPage({ cfg }) {
   const app = useApp(); const { db, can, save, remove, ask, notify } = app;
-  const table = cfg.table || cfg.key, canEdit = can(cfg.key, 'edit');
+  const table = cfg.table || cfg.key, canNew = can(cfg.key, 'create'), canEdit = can(cfg.key, 'modify'), canDel = can(cfg.key, 'delete') && cfg.canDelete !== false, canWrite = canNew || canEdit;
   const [q, setQ] = useState(''), [flt, setFlt] = useState({}), [limit, setLimit] = useState(60);
-  const fields = typeof cfg.fields === 'function' ? cfg.fields(app) : cfg.fields;
-  const cols = cfg.cols.map(c => typeof c === 'string' ? colFromField(fields.find(f => f.k === c), db) : c);
+  const baseFields = typeof cfg.fields === 'function' ? cfg.fields(app) : cfg.fields, hasCust = cfg.custom !== false && TYPES[table] && TYPES[table].extra !== undefined;
+  const fields = hasCust ? [...baseFields, ...custFields(db, cfg.key)] : baseFields;
+  const cols = [...cfg.cols.map(c => typeof c === 'string' ? colFromField(baseFields.find(f => f.k === c), db) : c), ...(hasCust ? customCols(db, cfg.key) : [])];
   let rows = cfg.scope ? cfg.scope(db[table], app) : db[table];
   rows = rows.filter(r => (cfg.filters || []).every(f => !flt[f.k] || r[f.k] === flt[f.k]));
   if (q.trim()) { const s = q.trim().toLowerCase(); rows = rows.filter(r => cols.some(c => String(c.v(r, db) ?? '').toLowerCase().includes(s))); }
   if (cfg.sort) rows = [...rows].sort(cfg.sort);
 
   const openForm = async row => {
-    const initial = row ? { ...row } : { ...(cfg.defaults ? cfg.defaults(db, app) : {}) };
+    const initial = row ? { ...row, ...(hasCust ? unpackExtra(row, db, cfg.key) : {}) } : { ...(cfg.defaults ? cfg.defaults(db, app) : {}), ...(hasCust ? unpackExtra({}, db, cfg.key) : {}) };
     const v = await ask({ title: row ? 'Modifier — ' + (cfg.rowTitle ? cfg.rowTitle(row, db) : cfg.singular) : cfg.nl, fields, initial, editing: row, onChange: cfg.onChange, validate: cfg.validate ? (vals, d) => cfg.validate(vals, d, row, app) : null, wide: fields.length > 8 });
     if (!v) return;
-    const out = cfg.beforeSave ? cfg.beforeSave({ ...v }, db, app, row) : v;
+    const packed = hasCust ? packExtra(v, db, cfg.key) : v;
+    const out = cfg.beforeSave ? cfg.beforeSave({ ...packed }, db, app, row) : packed;
     const saved = await save(table, out);
     notify(row ? 'Modifications enregistrées' : 'Enregistrement ajouté');
-    if (cfg.afterSave) cfg.afterSave(saved, db, app);
+    if (cfg.afterSave) cfg.afterSave(saved, db, app, v);
   };
   const del = async row => {
     const ok = await ask({ title: 'Supprimer cet enregistrement ?', message: cfg.delMsg || 'Cette action est définitive.', submit: 'Supprimer', danger: true });
     if (!ok) return; await remove(table, [row.id]); notify('Enregistrement supprimé');
   };
-  const acts = (cfg.rowActions || []).filter(a => a.open || canEdit);
-  const rowActs = r => html`${acts.filter(a => !a.show || a.show(r, app)).map(a => html`<button type="button" key=${a.l} className="icon-btn txt" title=${a.l} onClick=${() => a.run(r, app)}><${Icon} n=${a.i || 'check'} s=${15} /><span>${a.l}</span></button>`)}${canEdit && html`<button type="button" className="icon-btn" title="Modifier" aria-label="Modifier" onClick=${() => openForm(r)}><${Icon} n="edit" s=${16} /></button>`}${canEdit && cfg.canDelete !== false && html`<button type="button" className="icon-btn danger" title="Supprimer" aria-label="Supprimer" onClick=${() => del(r)}><${Icon} n="trash" s=${16} /></button>`}`;
-  const showActs = canEdit || acts.length > 0;
+  const acts = (cfg.rowActions || []).filter(a => a.open || canWrite);
+  const rowActs = r => html`${acts.filter(a => !a.show || a.show(r, app)).map(a => html`<button type="button" key=${a.l} className="icon-btn txt" title=${a.l} onClick=${() => a.run(r, app)}><${Icon} n=${a.i || 'check'} s=${15} /><span>${a.l}</span></button>`)}${canEdit && !cfg.noEdit && html`<button type="button" className="icon-btn" title="Modifier" aria-label="Modifier" onClick=${() => openForm(r)}><${Icon} n="edit" s=${16} /></button>`}${canDel && html`<button type="button" className="icon-btn danger" title="Supprimer" aria-label="Supprimer" onClick=${() => del(r)}><${Icon} n="trash" s=${16} /></button>`}`;
+  const showActs = (canEdit && !cfg.noEdit) || canDel || acts.length > 0;
 
   return html`<section>
-    <${PageHead} title=${cfg.title} sub=${cfg.sub}>${cfg.headExtra && cfg.headExtra(app)}${canEdit && html`<${Btn} tone="primary" icon="plus" onClick=${() => openForm()}>${cfg.nl}<//>`}<//>
+    <${PageHead} title=${cfg.title} sub=${cfg.sub}>${cfg.headExtra && cfg.headExtra(app)}${canNew && html`<${Btn} tone="primary" icon="plus" onClick=${() => openForm()}>${cfg.nl}<//>`}<//>
     ${cfg.topView && cfg.topView(app)}
     <div className="card flush">
       <div className="toolbar">
@@ -73,7 +89,7 @@ function CrudPage({ cfg }) {
   })}
         <span className="grow"></span><span className="count">${rows.length} ${rows.length > 1 ? 'résultats' : 'résultat'}</span>
       </div>
-      ${rows.length === 0 ? html`<${Empty} icon=${cfg.icon || 'file'} title="Aucun enregistrement">${q || Object.values(flt).some(Boolean) ? 'Aucun résultat pour ces critères.' : canEdit ? 'Utilisez le bouton « ' + cfg.nl + ' » pour commencer.' : 'Rien à afficher pour le moment.'}<//>`
+      ${rows.length === 0 ? html`<${Empty} icon=${cfg.icon || 'file'} title="Aucun enregistrement">${q || Object.values(flt).some(Boolean) ? 'Aucun résultat pour ces critères.' : canNew ? 'Utilisez le bouton « ' + cfg.nl + ' » pour commencer.' : 'Rien à afficher pour le moment.'}<//>`
       : cfg.card ? html`<div className="cards">${rows.slice(0, limit).map(r => html`<article key=${r.id} className="note">${cfg.card(r, db, app)}<div className="note-actions">${showActs && rowActs(r)}</div></article>`)}</div>`
         : html`<div className="tablewrap"><table className="t stack">
           <thead><tr>${cols.map((c, i) => html`<th key=${i} className=${c.num ? 'num' : ''}>${c.l}</th>`)}${showActs && html`<th className="actions"><span className="sr">Actions</span></th>`}</tr></thead>
@@ -90,7 +106,7 @@ const dateF = (k, l, extra) => ({ k, l, t: 'date', req: true, ...extra });
 CFG.students = {
   key: 'students', icon: 'users', title: 'Élèves', sub: 'Dossiers des élèves inscrits, classes et responsables.', nl: 'Nouvel élève', singular: 'élève', rowTitle: s => fullName(s),
   fields: [
-    { k: 'admission', l: 'N° d’admission', req: true, ph: 'ADM-2026-031', hint: 'Format ADM-AAAA-NNN, unique pour chaque élève.', check: (v, vals, db, ed) => !/^ADM-\d{4}-\d{3}$/.test(v) ? 'Format attendu : ADM-2026-031' : db.students.some(s => s.admission === v && (!ed || s.id !== ed.id)) ? 'Ce numéro est déjà attribué' : '' },
+    { k: 'admission', l: 'N° d’admission', req: true, ph: 'ADM-2026-031', hint: 'Format ADM-AAAA-NNN, unique pour chaque élève.', check: (v, vals, db, ed) => !/^ADM-\d{4}-\d{3,5}$/.test(v) ? 'Format attendu : ADM-2026-031' : db.students.some(s => s.admission === v && (!ed || s.id !== ed.id)) ? 'Ce numéro est déjà attribué' : '' },
     { k: 'statut', l: 'Statut', t: 'select', o: ['Actif', 'Transféré', 'Sorti'], req: true },
     { k: 'prenom', l: 'Prénom', req: true }, { k: 'nom', l: 'Nom', req: true },
     { k: 'sexe', l: 'Sexe', t: 'select', o: SEXE, req: true }, dateF('naissance', 'Date de naissance'),
@@ -105,7 +121,7 @@ CFG.students = {
 
 CFG.parents = {
   key: 'parents', icon: 'users', title: 'Parents et tuteurs', sub: 'Responsables légaux et liens avec les élèves.', nl: 'Nouveau parent', singular: 'parent', rowTitle: p => fullName(p),
-  fields: [{ k: 'prenom', l: 'Prénom', req: true }, { k: 'nom', l: 'Nom', req: true }, { k: 'lien', l: 'Lien avec l’élève', t: 'select', o: ['Père', 'Mère', 'Tuteur', 'Tutrice'], req: true },
+  fields: [{ k: 'prenom', l: 'Prénom', req: true }, { k: 'nom', l: 'Nom', req: true }, { k: 'lien', l: 'Lien avec l’élève', t: 'select', o: LISTF('parents.lien'), req: true },
     { k: 'tel', l: 'Téléphone', t: 'tel', req: true, ph: '77 123 45 67', check: PHONE }, { k: 'email', l: 'E-mail', t: 'email' }, { k: 'profession', l: 'Profession' }, { k: 'adresse', l: 'Adresse / quartier', w: 'full' }],
   cols: [{ l: 'Responsable', v: p => fullName(p) }, 'lien', 'tel', { l: 'Enfants scolarisés', v: (p, db) => db.students.filter(s => s.parentId === p.id).map(s => s.prenom).join(', ') || '—' }, 'profession'],
   sort: byName,
@@ -113,39 +129,35 @@ CFG.parents = {
 };
 
 CFG.admissions = {
-  key: 'admissions', icon: 'clip', title: 'Admissions', sub: 'Candidatures reçues. Admettre un candidat crée son dossier élève et la fiche du parent.', nl: 'Nouvelle candidature', singular: 'candidature', rowTitle: a => fullName(a),
-  fields: [dateF('date', 'Date de la demande'), { k: 'statut', l: 'Décision', t: 'select', o: ['En attente', 'Admis', 'Refusé'], req: true },
+  key: 'admissions', icon: 'clip', title: 'Admissions', sub: 'Candidatures reçues en ligne ou au guichet. Admettre un candidat crée son dossier élève, la fiche du parent et les comptes de connexion.', nl: 'Nouvelle candidature', singular: 'candidature', rowTitle: a => fullName(a),
+  headExtra: app => app.regOpen && html`<${Btn} icon="link" onClick=${app.openPublicForm}>Voir le formulaire public<//>`,
+  fields: [{ k: 'ref', l: 'Référence', ro: true, show: v => !!v.id }, dateF('date', 'Date de la demande'), { k: 'statut', l: 'Décision', t: 'select', o: ['En attente', 'Refusé'], req: true, hint: 'Pour admettre, utilisez le bouton « Admettre » de la liste.' },
     { k: 'prenom', l: 'Prénom du candidat', req: true }, { k: 'nom', l: 'Nom du candidat', req: true }, { k: 'sexe', l: 'Sexe', t: 'select', o: SEXE, req: true }, dateF('naissance', 'Date de naissance'),
     { k: 'classId', l: 'Classe demandée', t: 'ref', ref: 'classes', req: true },
-    { k: 'parentPrenom', l: 'Prénom du parent', req: true }, { k: 'parentNom', l: 'Nom du parent', req: true }, { k: 'parentTel', l: 'Téléphone du parent', t: 'tel', req: true, check: PHONE }, { k: 'lien', l: 'Lien', t: 'select', o: ['Père', 'Mère', 'Tuteur', 'Tutrice'] }, { k: 'remarque', l: 'Remarque', w: 'full' }],
+    { k: 'parentPrenom', l: 'Prénom du parent', req: true }, { k: 'parentNom', l: 'Nom du parent', req: true }, { k: 'parentTel', l: 'Téléphone du parent', t: 'tel', req: true, check: PHONE }, { k: 'parentEmail', l: 'E-mail du parent', t: 'email', hint: 'Sert d’identifiant de connexion et reçoit les messages.' }, { k: 'lien', l: 'Lien', t: 'select', o: LISTF('parents.lien') }, { k: 'remarque', l: 'Remarque', w: 'full' }],
   defaults: () => ({ date: todayStr(), statut: 'En attente' }),
-  cols: [{ l: 'Date', v: a => fmtDate(a.date) }, { l: 'Candidat', v: a => fullName(a) }, 'classId', { l: 'Parent', v: a => a.parentPrenom + ' ' + a.parentNom + ' · ' + a.parentTel }, { l: 'Décision', v: a => a.statut, r: a => B(a.statut === 'Admis' ? 'ok' : a.statut === 'Refusé' ? 'bad' : 'warn', a.statut) }],
-  filters: [{ k: 'statut', l: 'Décision', t: 'select', o: ['En attente', 'Admis', 'Refusé'] }],
-  sort: (a, b) => b.date.localeCompare(a.date), canDelete: true,
+  cols: [{ l: 'Réf.', v: a => a.ref, mono: true }, { l: 'Date', v: a => fmtDate(a.date) }, { l: 'Candidat', v: a => fullName(a) }, 'classId', { l: 'Parent', v: a => a.parentPrenom + ' ' + a.parentNom + ' · ' + a.parentTel }, { l: 'Origine', v: a => a.source, r: a => a.source === 'en ligne' ? B('info', 'En ligne') : B('mute', 'Guichet') }, { l: 'Décision', v: a => a.statut, r: a => B(a.statut === 'Admis' ? 'ok' : a.statut === 'Refusé' ? 'bad' : 'warn', a.statut) }],
+  filters: [{ k: 'statut', l: 'Décision', t: 'select', o: ['En attente', 'Admis', 'Refusé'] }, { k: 'source', l: 'Origine', t: 'select', o: [{ v: 'en ligne', l: 'En ligne' }, { v: 'secrétariat', l: 'Guichet' }] }],
+  sort: (a, b) => b.date.localeCompare(a.date) || b.ref.localeCompare(a.ref),
   rowActions: [{
     l: 'Admettre', i: 'check', show: a => a.statut !== 'Admis',
     run: async (a, app) => {
       const db = app.db;
       const v = await app.ask({
-        title: 'Admettre ' + fullName(a), message: 'Le dossier élève et la fiche du parent seront créés automatiquement.',
-        fields: [{ k: 'classId', l: 'Classe d’affectation', t: 'ref', ref: 'classes', req: true }, { k: 'admission', l: 'N° d’admission', req: true, check: v => !/^ADM-\d{4}-\d{3}$/.test(v) ? 'Format attendu : ADM-2026-031' : db.students.some(s => s.admission === v) ? 'Numéro déjà attribué' : '' }],
+        title: 'Admettre ' + fullName(a), message: 'Le dossier élève et la fiche du parent sont créés. Les comptes de connexion sont créés automatiquement si cette option est active dans « Modules ».',
+        fields: [{ k: 'classId', l: 'Classe d’affectation', t: 'ref', ref: 'classes', req: true }, { k: 'admission', l: 'N° d’admission', req: true, check: v => !/^ADM-\d{4}-\d{3,5}$/.test(v) ? 'Format attendu : ADM-2026-031' : db.students.some(s => s.admission === v) ? 'Numéro déjà attribué' : '' }],
         initial: { classId: a.classId, admission: nextAdmission(db) }, submit: 'Admettre',
         validate: (vals, d) => { const c = d.classes.find(x => x.id === vals.classId); const eff = d.students.filter(s => s.classId === vals.classId && s.statut === 'Actif').length; return c && eff >= c.effectifMax ? 'La classe ' + c.nom + ' est complète (' + eff + '/' + c.effectifMax + ').' : ''; }
       });
       if (!v) return;
-      const tel = x => (x || '').replace(/\s/g, '');
-      let par = a.parentTel ? db.parents.find(p => tel(p.tel) === tel(a.parentTel)) : null;
-      if (!par) par = await app.save('parents', { nom: a.parentNom, prenom: a.parentPrenom, lien: a.lien || 'Tuteur', tel: a.parentTel, email: '', profession: '', adresse: '' });
-      const st = await app.save('students', { admission: v.admission, nom: a.nom, prenom: a.prenom, sexe: a.sexe, naissance: a.naissance, classId: v.classId, parentId: par.id, tel: a.parentTel, adresse: '', statut: 'Actif', nin: '' });
-      await app.save('admissions', { ...a, statut: 'Admis', classId: v.classId, studentId: st.id });
-      app.notify(fullName(a) + ' est admis(e) en ' + clsName(db, v.classId));
+      try { const r = await app.admit(a.id, v.classId, v.admission); app.notify(fullName(a) + ' est admis(e) en ' + r.classe); if (r.comptes.some(c => c.pwd)) await app.showCredentials(r.comptes, 'Accès créés pour ' + fullName(a)); } catch (e) { app.notify(e.message, 'bad'); }
     }
   }]
 };
 
 CFG.classes = {
   key: 'classes', icon: 'school', title: 'Classes et sections', sub: 'Organisation des classes, titulaires et effectifs.', nl: 'Nouvelle classe', singular: 'classe', rowTitle: c => c.nom,
-  fields: [{ k: 'nom', l: 'Nom de la classe', req: true, ph: '6ème A' }, { k: 'niveau', l: 'Niveau', t: 'select', o: ['6ème', '5ème', '4ème', '3ème', '2nde', '1ère', 'Terminale'], req: true }, { k: 'section', l: 'Section', ph: 'A' },
+  fields: [{ k: 'nom', l: 'Nom de la classe', req: true, ph: '6ème A' }, { k: 'niveau', l: 'Niveau', t: 'select', o: LISTF('classes.niveau'), req: true }, { k: 'section', l: 'Section', ph: 'A' },
     { k: 'titulaireId', l: 'Professeur principal', t: 'ref', ref: 'teachers' }, { k: 'effectifMax', l: 'Effectif maximum', t: 'num', min: 1, req: true }, { k: 'salle', l: 'Salle' }],
   defaults: () => ({ effectifMax: 40 }),
   cols: ['nom', 'niveau', { l: 'Professeur principal', v: (c, db) => refLabel(db, 'teachers', c.titulaireId) }, { l: 'Effectif', v: (c, db) => db.students.filter(s => s.classId === c.id && s.statut === 'Actif').length + ' / ' + c.effectifMax, mono: true }, 'salle'],
@@ -160,7 +172,7 @@ CFG.subjects = {
 
 CFG.teachers = {
   key: 'teachers', icon: 'users', title: 'Enseignants', sub: 'Équipe pédagogique et matières enseignées.', nl: 'Nouvel enseignant', singular: 'enseignant', rowTitle: t => fullName(t),
-  fields: [{ k: 'matricule', l: 'Matricule', req: true, ph: 'ENS-009', check: (v, vals, db, ed) => db.teachers.some(t => t.matricule === v && (!ed || t.id !== ed.id)) ? 'Matricule déjà utilisé' : '' }, { k: 'statut', l: 'Statut', t: 'select', o: ['Permanent', 'Vacataire'], req: true },
+  fields: [{ k: 'matricule', l: 'Matricule', req: true, ph: 'ENS-009', check: (v, vals, db, ed) => db.teachers.some(t => t.matricule === v && (!ed || t.id !== ed.id)) ? 'Matricule déjà utilisé' : '' }, { k: 'statut', l: 'Statut', t: 'select', o: LISTF('teachers.statut'), req: true },
     { k: 'prenom', l: 'Prénom', req: true }, { k: 'nom', l: 'Nom', req: true }, { k: 'sexe', l: 'Sexe', t: 'select', o: SEXE }, { k: 'specialite', l: 'Spécialité' },
     { k: 'tel', l: 'Téléphone', t: 'tel', check: PHONE }, { k: 'email', l: 'E-mail', t: 'email' }, { k: 'embauche', l: 'Date d’embauche', t: 'date' }],
   defaults: db => ({ matricule: 'ENS-' + pad(nextSeq(db.teachers, 'matricule')), statut: 'Permanent' }),
@@ -177,22 +189,30 @@ CFG.assignments = {
   sort: (a, b) => a.classId.localeCompare(b.classId)
 };
 
+const SRC_LABEL = { inscription: 'Inscription en ligne', admission: 'Admission', manuel: 'Créé par la direction', installation: 'Installation' };
 CFG.users = {
-  key: 'users', icon: 'shield', title: 'Utilisateurs et rôles', sub: 'Comptes du personnel, des élèves et des parents. Le rôle détermine les modules visibles.', nl: 'Nouvel utilisateur', singular: 'utilisateur', rowTitle: u => u.nom,
-  fields: [{ k: 'nom', l: 'Nom complet', req: true }, { k: 'email', l: 'Adresse Google', t: 'email', req: true, hint: 'Le compte Google qui ouvre l’application.', check: (v, vals, db, ed) => db.users.some(u => u.email.toLowerCase() === (v || '').toLowerCase() && (!ed || u.id !== ed.id)) ? 'Cette adresse a déjà un compte' : '' },
+  key: 'users', icon: 'shield', title: 'Utilisateurs et rôles', sub: 'Comptes du personnel, des élèves, des parents et des familles candidates. Les droits de chaque rôle se règlent dans « Autorisations ».', nl: 'Nouvel utilisateur', singular: 'utilisateur', rowTitle: u => u.nom, custom: false,
+  headExtra: app => html`<${Btn} icon="shield" onClick=${() => app.go('perms')}>Autorisations<//>`,
+  fields: [{ k: 'nom', l: 'Nom complet', req: true },
+    { k: 'email', l: 'E-mail', t: 'email', hint: 'Facultatif si vous indiquez un identifiant.' },
+    { k: 'login', l: 'Identifiant de connexion', hint: 'Laissez vide pour utiliser l’e-mail. Peut être un numéro de téléphone ou un n° d’admission.', check: (v, vals, db, ed) => { const key = loginKey_(v || vals.email); if (!key) return 'Indiquez un e-mail ou un identifiant'; return db.users.some(u => u.id !== (ed && ed.id) && (u.login === key || u.email === key)) ? 'Cet identifiant a déjà un compte' : ''; } },
     { k: 'role', l: 'Rôle', t: 'select', o: ROLES.map(([v, l]) => ({ v, l })), req: true },
     { k: 'linkId', l: 'Fiche liée', t: 'select', show: v => ['enseignant', 'eleve', 'parent'].includes(v.role), hint: 'Relie le compte à l’enseignant, l’élève ou le parent concerné.', o: (v, db) => v.role === 'enseignant' ? teacherOptions(db) : v.role === 'eleve' ? db.students.map(s => ({ v: s.id, l: LABEL.students(s, db) })) : v.role === 'parent' ? db.parents.map(p => ({ v: p.id, l: fullName(p) })) : [] },
-    { k: 'tel', l: 'Téléphone', t: 'tel' }, { k: 'actif', l: 'Compte', t: 'bool', cl: 'Actif' }],
+    { k: 'tel', l: 'Téléphone', t: 'tel' }, { k: 'actif', l: 'Compte', t: 'bool', cl: 'Actif' },
+    { k: 'pwd', l: 'Mot de passe provisoire', t: 'text', req: true, show: v => IN_GAS && !v.id, hint: '8 caractères minimum. La personne devra le changer à sa première connexion.', check: x => x && x.length < 8 ? 'Au moins 8 caractères' : '' }],
   defaults: () => ({ role: 'enseignant', actif: true }),
-  cols: ['nom', { l: 'E-mail', v: u => u.email }, { l: 'Rôle', v: u => ROLE_LABEL[u.role], r: u => B(u.role === 'admin' ? 'accent' : 'info', ROLE_LABEL[u.role]) }, { l: 'Compte', v: u => u.actif ? 'Actif' : 'Désactivé', r: u => B(u.actif ? 'ok' : 'mute', u.actif ? 'Actif' : 'Désactivé') }],
+  beforeSave: (v, db, app, row) => { const o = { ...v }; delete o.pwd; o.email = String(o.email || '').trim().toLowerCase(); o.login = loginKey_(o.login || o.email); o.source = row ? row.source : 'manuel'; return o; },
+  afterSave: async (saved, db, app, v) => { if (IN_GAS && v.pwd) { try { await Api.setPassword(saved.id, v.pwd); app.notify('Mot de passe provisoire défini pour ' + saved.nom); } catch (e) { app.notify(e.message, 'bad'); } } },
+  cols: ['nom', { l: 'Identifiant', v: u => u.login || u.email, mono: true }, { l: 'Rôle', v: u => ROLE_LABEL[u.role], r: u => B(u.role === 'admin' ? 'accent' : u.role === 'candidat' ? 'warn' : 'info', ROLE_LABEL[u.role]) }, { l: 'Origine', v: u => SRC_LABEL[u.source] || '', r: u => html`${SRC_LABEL[u.source] || '—'}${u.mustChange && html` ${B('warn', 'Mot de passe provisoire')}`}` }, { l: 'Compte', v: u => u.actif ? 'Actif' : 'Désactivé', r: u => B(u.actif ? 'ok' : 'mute', u.actif ? 'Actif' : 'Désactivé') }],
+  filters: [{ k: 'role', l: 'Rôle', t: 'select', o: ROLES.map(([v, l]) => ({ v, l })) }],
   sort: byName, delMsg: 'Cet utilisateur ne pourra plus ouvrir l’application.',
-  rowActions: IN_GAS ? [{ l: 'Mot de passe', i: 'shield', run: async (u, app) => { const v = await app.ask({ title: 'Définir le mot de passe de ' + u.nom, message: 'Communiquez ce mot de passe à la personne. Elle pourra ensuite le changer depuis son profil.', fields: [{ k: 'pwd', l: 'Nouveau mot de passe', t: 'text', req: true, hint: '8 caractères minimum.', check: x => x && x.length < 8 ? 'Au moins 8 caractères' : '' }], submit: 'Enregistrer' }); if (!v) return; try { await Api.setPassword(u.id, v.pwd); app.notify('Mot de passe défini pour ' + u.nom); } catch (e) { app.notify(e.message, 'bad'); } } }] : []
+  rowActions: IN_GAS ? [{ l: 'Mot de passe', i: 'shield', run: async (u, app) => { const v = await app.ask({ title: 'Nouveau mot de passe provisoire pour ' + u.nom, message: 'Communiquez ce mot de passe à la personne. Elle devra le remplacer par un mot de passe de son choix dès sa première connexion.', fields: [{ k: 'pwd', l: 'Mot de passe provisoire', t: 'text', req: true, hint: '8 caractères minimum.', check: x => x && x.length < 8 ? 'Au moins 8 caractères' : '' }], submit: 'Enregistrer' }); if (!v) return; try { await Api.setPassword(u.id, v.pwd); await app.reload(); app.notify('Mot de passe provisoire défini pour ' + u.nom); } catch (e) { app.notify(e.message, 'bad'); } } }] : []
 };
 
 CFG.exams = {
   key: 'exams', icon: 'clip', title: 'Examens et évaluations', sub: 'Programmation des devoirs et compositions, classe par classe.', nl: 'Nouvelle épreuve', singular: 'épreuve', rowTitle: (e, db) => LABEL.exams(e, db),
   fields: [{ k: 'session', l: 'Session', req: true, ph: 'Composition 1 – T1', hint: 'Les épreuves d’une même session sont regroupées dans les résultats et les convocations.', list: db => [...new Set(db.exams.map(e => e.session))] },
-    { k: 'type', l: 'Type', t: 'select', o: ['Devoir', 'Composition', 'Examen blanc', 'Examen final'], req: true },
+    { k: 'type', l: 'Type', t: 'select', o: LISTF('exams.type'), req: true },
     { k: 'classId', l: 'Classe', t: 'ref', ref: 'classes', req: true }, { k: 'subjectId', l: 'Matière', t: 'ref', ref: 'subjects', req: true },
     dateF('date', 'Date'), { k: 'heure', l: 'Heure', t: 'time', req: true }, { k: 'duree', l: 'Durée (minutes)', t: 'num', min: 15, req: true }, { k: 'salle', l: 'Salle' },
     { k: 'noteMax', l: 'Barème (note maximale)', t: 'num', min: 1, req: true }, { k: 'trimestre', l: 'Trimestre', t: 'select', o: ['T1', 'T2', 'T3'], req: true }],
@@ -248,10 +268,10 @@ CFG.conduct = {
 };
 CFG.activities = {
   key: 'activities', icon: 'award', title: 'Activités extrascolaires', sub: 'Sport, culture, clubs et concours auxquels participent les élèves.', nl: 'Nouvelle activité', singular: 'activité', rowTitle: a => a.activite,
-  fields: [{ k: 'studentId', l: 'Élève', t: 'ref', ref: 'students', req: true, w: 'full' }, { k: 'activite', l: 'Activité', req: true }, { k: 'categorie', l: 'Catégorie', t: 'select', o: ['Sport', 'Culture', 'Club', 'Concours', 'Bénévolat'], req: true }, dateF('date', 'Date de début'), { k: 'resultat', l: 'Rôle ou résultat' }],
+  fields: [{ k: 'studentId', l: 'Élève', t: 'ref', ref: 'students', req: true, w: 'full' }, { k: 'activite', l: 'Activité', req: true }, { k: 'categorie', l: 'Catégorie', t: 'select', o: LISTF('activities.categorie'), req: true }, dateF('date', 'Date de début'), { k: 'resultat', l: 'Rôle ou résultat' }],
   defaults: () => ({ date: todayStr() }),
   cols: [{ l: 'Élève', v: (a, db) => refLabel(db, 'students', a.studentId) }, 'activite', 'categorie', { l: 'Début', v: a => fmtDate(a.date) }, { l: 'Rôle / résultat', v: a => a.resultat }],
-  filters: [{ k: 'categorie', l: 'Catégorie', t: 'select', o: ['Sport', 'Culture', 'Club', 'Concours', 'Bénévolat'] }], sort: (a, b) => b.date.localeCompare(a.date)
+  filters: [{ k: 'categorie', l: 'Catégorie', t: 'select', o: LISTD('activities.categorie') }], sort: (a, b) => b.date.localeCompare(a.date)
 };
 
 const myKids = app => app.db.students.filter(s => app.me.role === 'eleve' ? s.id === app.me.linkId : s.parentId === app.me.linkId);
@@ -288,7 +308,7 @@ CFG.notices = {
 
 CFG.events = {
   key: 'events', icon: 'cal', title: 'Calendrier scolaire', sub: 'Examens, réunions, fêtes et vacances de l’année.', nl: 'Nouvel événement', singular: 'événement', rowTitle: e => e.titre,
-  fields: [{ k: 'titre', l: 'Événement', req: true, w: 'full' }, dateF('date', 'Début'), { k: 'fin', l: 'Fin', t: 'date', check: (v, vals) => v && vals.date && v < vals.date ? 'La fin précède le début' : '' }, { k: 'categorie', l: 'Catégorie', t: 'select', o: ['Examen', 'Réunion', 'Fête', 'Vacances', 'Autre'], req: true }, { k: 'lieu', l: 'Lieu' }],
+  fields: [{ k: 'titre', l: 'Événement', req: true, w: 'full' }, dateF('date', 'Début'), { k: 'fin', l: 'Fin', t: 'date', check: (v, vals) => v && vals.date && v < vals.date ? 'La fin précède le début' : '' }, { k: 'categorie', l: 'Catégorie', t: 'select', o: LISTF('events.categorie'), req: true }, { k: 'lieu', l: 'Lieu' }],
   defaults: () => ({ date: todayStr(), categorie: 'Réunion' }),
   topView: app => html`<${MonthGrid} />`,
   cols: ['titre', { l: 'Dates', v: e => fmtDate(e.date) + (e.fin && e.fin !== e.date ? ' → ' + fmtDate(e.fin) : '') }, { l: 'Catégorie', v: e => e.categorie, r: e => B(EVT_TONE[e.categorie] || 'mute', e.categorie) }, 'lieu'],
@@ -308,22 +328,22 @@ CFG.tickets = {
 
 CFG.documents = {
   key: 'documents', icon: 'file', title: 'Documents', sub: 'Pièces des dossiers élèves : dépôt, vérification et alertes d’expiration.', nl: 'Nouveau document', singular: 'document', rowTitle: d => d.titre,
-  fields: [{ k: 'studentId', l: 'Élève', t: 'ref', ref: 'students', req: true, w: 'full' }, { k: 'type', l: 'Type de pièce', t: 'select', o: ['Acte de naissance', 'Certificat médical', 'Bulletin précédent', 'Pièce d’identité du tuteur', 'Certificat de scolarité', 'Autorisation parentale'], req: true }, { k: 'titre', l: 'Intitulé', req: true }, { k: 'fichier', l: 'Fichier', t: 'file', hint: 'Seul le nom du fichier est enregistré dans la feuille de calcul.' }, { k: 'expiration', l: 'Date d’expiration', t: 'date' }, { k: 'verifie', l: 'Vérification', t: 'bool', cl: 'Document vérifié' }],
+  fields: [{ k: 'studentId', l: 'Élève', t: 'ref', ref: 'students', req: true, w: 'full' }, { k: 'type', l: 'Type de pièce', t: 'select', o: LISTF('documents.type'), req: true }, { k: 'titre', l: 'Intitulé', req: true }, { k: 'fichier', l: 'Fichier', t: 'file', hint: 'Seul le nom du fichier est enregistré dans la feuille de calcul.' }, { k: 'expiration', l: 'Date d’expiration', t: 'date' }, { k: 'verifie', l: 'Vérification', t: 'bool', cl: 'Document vérifié' }],
   defaults: () => ({ verifie: false }),
   onChange: (v, k, db) => k === 'type' && !v.titre ? { titre: v.type } : null,
   cols: [{ l: 'Intitulé', v: d => d.titre }, { l: 'Élève', v: (d, db) => refLabel(db, 'students', d.studentId) }, { l: 'Fichier', v: d => d.fichier, mono: true }, { l: 'Vérifié', v: d => d.verifie ? 'Oui' : 'Non', r: d => B(d.verifie ? 'ok' : 'warn', d.verifie ? 'Vérifié' : 'À vérifier') }, { l: 'Échéance', v: d => expInfo(d.expiration).txt, r: d => B(expInfo(d.expiration).tone, expInfo(d.expiration).txt) }],
-  filters: [{ k: 'type', l: 'Type', t: 'select', o: ['Acte de naissance', 'Certificat médical', 'Bulletin précédent', 'Pièce d’identité du tuteur', 'Certificat de scolarité', 'Autorisation parentale'] }],
+  filters: [{ k: 'type', l: 'Type', t: 'select', o: LISTD('documents.type') }],
   sort: (a, b) => (a.expiration || '9999').localeCompare(b.expiration || '9999'),
   rowActions: [{ l: 'Vérifier', i: 'check', show: d => !d.verifie, run: async (d, app) => { await app.save('documents', { ...d, verifie: true }); app.notify('Document marqué comme vérifié'); } }]
 };
 
 CFG.assets = {
   key: 'assets', icon: 'tool', title: 'Équipements', sub: 'Registre des biens de l’école et historique d’entretien.', nl: 'Nouvel équipement', singular: 'équipement', rowTitle: a => a.nom,
-  fields: [{ k: 'tag', l: 'Code d’inventaire', req: true, ph: 'IMM-007', check: (v, vals, db, ed) => db.assets.some(a => a.tag === v && (!ed || a.id !== ed.id)) ? 'Code déjà utilisé' : '' }, { k: 'nom', l: 'Désignation', req: true }, { k: 'categorie', l: 'Catégorie', t: 'select', o: ['Informatique', 'Bureautique', 'Mobilier', 'Énergie', 'Transport', 'Sport', 'Autre'], req: true }, { k: 'lieu', l: 'Emplacement' },
+  fields: [{ k: 'tag', l: 'Code d’inventaire', req: true, ph: 'IMM-007', check: (v, vals, db, ed) => db.assets.some(a => a.tag === v && (!ed || a.id !== ed.id)) ? 'Code déjà utilisé' : '' }, { k: 'nom', l: 'Désignation', req: true }, { k: 'categorie', l: 'Catégorie', t: 'select', o: LISTF('assets.categorie'), req: true }, { k: 'lieu', l: 'Emplacement' },
     { k: 'achat', l: 'Date d’achat', t: 'date' }, { k: 'valeur', l: 'Valeur d’achat (FCFA)', t: 'num', min: 0, step: 1000 }, { k: 'etat', l: 'État', t: 'select', o: ['Bon', 'Passable', 'Usagé', 'En panne'], req: true }, { k: 'responsable', l: 'Responsable' }],
   defaults: db => ({ tag: 'IMM-' + pad(nextSeq(db.assets, 'tag')), etat: 'Bon' }),
   cols: [{ l: 'Code', v: a => a.tag, mono: true }, 'nom', 'categorie', 'lieu', { l: 'Valeur', v: a => money(a.valeur), num: true }, { l: 'État', v: a => a.etat, r: a => B({ Bon: 'ok', Passable: 'info', Usagé: 'warn', 'En panne': 'bad' }[a.etat], a.etat) }, { l: 'Dernier entretien', v: (a, db) => { const m = db.maintenance.filter(x => x.assetId === a.id).sort((p, q) => q.date.localeCompare(p.date))[0]; return m ? fmtDate(m.date) : '—'; } }],
-  filters: [{ k: 'categorie', l: 'Catégorie', t: 'select', o: ['Informatique', 'Bureautique', 'Mobilier', 'Énergie', 'Transport', 'Sport', 'Autre'] }, { k: 'etat', l: 'État', t: 'select', o: ['Bon', 'Passable', 'Usagé', 'En panne'] }],
+  filters: [{ k: 'categorie', l: 'Catégorie', t: 'select', o: LISTD('assets.categorie') }, { k: 'etat', l: 'État', t: 'select', o: ['Bon', 'Passable', 'Usagé', 'En panne'] }],
   sort: (a, b) => a.tag.localeCompare(b.tag),
   rowActions: [
     { l: 'Entretien', i: 'tool', run: async (a, app) => { const v = await app.ask({ title: 'Enregistrer un entretien — ' + a.nom, fields: [dateF('date', 'Date'), { k: 'type', l: 'Type', t: 'select', o: ['Préventive', 'Corrective'], req: true }, { k: 'description', l: 'Intervention', req: true, w: 'full' }, { k: 'cout', l: 'Coût (FCFA)', t: 'num', min: 0, step: 500 }, { k: 'technicien', l: 'Technicien' }], initial: { date: todayStr(), type: 'Préventive' }, submit: 'Enregistrer' }); if (!v) return; await app.save('maintenance', { ...v, assetId: a.id }); app.notify('Entretien enregistré'); } },
@@ -339,11 +359,11 @@ CFG.maintenance = {
 
 CFG.stock = {
   key: 'stock', icon: 'box', title: 'Stock', sub: 'Fournitures et consommables. Les quantités se calculent à partir des mouvements.', nl: 'Nouvel article', singular: 'article', rowTitle: s => s.nom,
-  fields: [{ k: 'code', l: 'Code article', req: true, check: (v, vals, db, ed) => db.stock.some(s => s.code === v && (!ed || s.id !== ed.id)) ? 'Code déjà utilisé' : '' }, { k: 'nom', l: 'Désignation', req: true }, { k: 'categorie', l: 'Catégorie', t: 'select', o: ['Fournitures', 'Bureautique', 'Entretien', 'Sport', 'Autre'], req: true }, { k: 'unite', l: 'Unité', req: true, ph: 'pièce, boîte, ramette…' },
+  fields: [{ k: 'code', l: 'Code article', req: true, check: (v, vals, db, ed) => db.stock.some(s => s.code === v && (!ed || s.id !== ed.id)) ? 'Code déjà utilisé' : '' }, { k: 'nom', l: 'Désignation', req: true }, { k: 'categorie', l: 'Catégorie', t: 'select', o: LISTF('stock.categorie'), req: true }, { k: 'unite', l: 'Unité', req: true, ph: 'pièce, boîte, ramette…' },
     { k: 'initial', l: 'Quantité initiale', t: 'num', min: 0, req: true }, { k: 'seuil', l: 'Seuil de réapprovisionnement', t: 'num', min: 0, req: true }, { k: 'prix', l: 'Prix unitaire (FCFA)', t: 'num', min: 0, step: 50 }],
   defaults: () => ({ initial: 0, seuil: 5, unite: 'pièce' }),
   cols: [{ l: 'Code', v: s => s.code, mono: true }, 'nom', 'categorie', { l: 'Quantité', v: (s, db) => stockQty(db, s) + ' ' + s.unite, num: true }, { l: 'Seuil', v: s => s.seuil, num: true }, { l: 'Valeur', v: (s, db) => money(stockQty(db, s) * s.prix), num: true }, { l: 'Statut', v: (s, db) => stockQty(db, s) <= 0 ? 'Rupture' : stockQty(db, s) <= s.seuil ? 'À réapprovisionner' : 'Suffisant', r: (s, db) => { const q = stockQty(db, s); return q <= 0 ? B('bad', 'Rupture') : q <= s.seuil ? B('warn', 'À réapprovisionner') : B('ok', 'Suffisant'); } }],
-  filters: [{ k: 'categorie', l: 'Catégorie', t: 'select', o: ['Fournitures', 'Bureautique', 'Entretien', 'Sport', 'Autre'] }],
+  filters: [{ k: 'categorie', l: 'Catégorie', t: 'select', o: LISTD('stock.categorie') }],
   sort: (a, b) => a.nom.localeCompare(b.nom, 'fr'),
   rowActions: ['Entrée', 'Sortie'].map(type => ({
     l: type, i: type === 'Entrée' ? 'plus' : 'swap',
@@ -372,7 +392,7 @@ CFG.feeStructure = {
 
 CFG.payments = {
   key: 'payments', icon: 'receipt', title: 'Encaissement', sub: 'Paiements reçus à la caisse : espèces, Wave, Orange Money, virement ou chèque. Un reçu numéroté est généré.', nl: 'Nouvel encaissement', singular: 'paiement', rowTitle: p => p.recu,
-  fields: [dateF('date', 'Date'), { k: 'mode', l: 'Mode de paiement', t: 'select', o: ['Espèces', 'Wave', 'Orange Money', 'Virement', 'Chèque'], req: true }, { k: 'studentId', l: 'Élève', t: 'ref', ref: 'students', req: true, w: 'full', fl: s => s.statut === 'Actif' },
+  fields: [dateF('date', 'Date'), { k: 'mode', l: 'Mode de paiement', t: 'select', o: LISTF('payments.mode'), req: true }, { k: 'studentId', l: 'Élève', t: 'ref', ref: 'students', req: true, w: 'full', fl: s => s.statut === 'Actif' },
     { k: 'type', l: 'Nature', t: 'select', o: ['Inscription', 'Mensualité', 'Transport', 'Cantine', 'Autre'], req: true },
     { k: 'mois', l: 'Mois concerné', t: 'select', o: MOIS, show: v => ['Mensualité', 'Transport', 'Cantine'].includes(v.type), check: (v, vals) => vals.type === 'Mensualité' && !v ? 'Précisez le mois' : '' },
     { k: 'montant', l: 'Montant (FCFA)', t: 'num', min: 1, step: 500, req: true, hint: (v, db) => { const s = db.students.find(x => x.id === v.studentId); return s ? 'Reste dû à ce jour pour cet élève : ' + money(studentDues(db, s).reste) : ''; } },
@@ -388,7 +408,7 @@ CFG.payments = {
   },
   beforeSave: (v, db, app, row) => row ? v : { ...v, recu: nextReceipt(db), caissier: app.me.nom },
   cols: [{ l: 'Reçu', v: p => p.recu, mono: true }, { l: 'Date', v: p => fmtDate(p.date) }, { l: 'Élève', v: (p, db) => refLabel(db, 'students', p.studentId) }, { l: 'Nature', v: p => p.type + (p.mois ? ' · ' + p.mois : '') }, { l: 'Montant', v: p => money(p.montant), num: true }, { l: 'Mode', v: p => p.mode }],
-  filters: [{ k: 'type', l: 'Nature', t: 'select', o: ['Inscription', 'Mensualité', 'Transport', 'Cantine', 'Autre'] }, { k: 'mode', l: 'Mode', t: 'select', o: ['Espèces', 'Wave', 'Orange Money', 'Virement', 'Chèque'] }, { k: 'mois', l: 'Mois', t: 'select', o: MOIS }],
+  filters: [{ k: 'type', l: 'Nature', t: 'select', o: ['Inscription', 'Mensualité', 'Transport', 'Cantine', 'Autre'] }, { k: 'mode', l: 'Mode', t: 'select', o: LISTD('payments.mode') }, { k: 'mois', l: 'Mois', t: 'select', o: MOIS }],
   sort: (a, b) => b.date.localeCompare(a.date) || b.recu.localeCompare(a.recu),
   delMsg: 'Supprimer un encaissement efface aussi son numéro de reçu. Préférez une correction par écriture contraire si le reçu a déjà été remis.',
   rowActions: [{ l: 'Reçu', i: 'receipt', open: true, run: (p, app) => app.ask({ title: 'Reçu ' + p.recu, wide: true, noCancel: true, submit: 'Fermer', extra: () => html`<${Receipt} p=${p} />` }) }]

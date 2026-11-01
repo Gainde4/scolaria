@@ -3,6 +3,9 @@ const { useState, useEffect, useMemo, useRef, useCallback, createContext, useCon
 const html = htm.bind(React.createElement);
 const IN_GAS = typeof google !== 'undefined' && !!(google.script && google.script.run);
 
+/* Règles communes (registre des modules, droits, inscription, messages) : le même code tourne dans Code.gs */
+/*__SHARED__*/
+
 /* Schéma unique : injecté à la construction, partagé avec Code.gs */
 const SCHEMA = __SCHEMA__;
 const TYPES = {};
@@ -37,9 +40,8 @@ const money = n => num(n) + ' F';
 const dec = (n, d = 2) => (Number(n)).toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d }).replace(/[  ]/g, ' ');
 const fullName = p => p ? (p.prenom + ' ' + p.nom).trim() : '—';
 const byName = (a, b) => (a.nom || '').localeCompare(b.nom || '', 'fr') || (a.prenom || '').localeCompare(b.prenom || '', 'fr');
-const MOIS = ['Octobre', 'Novembre', 'Décembre', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin'];
 const JOURS = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
-const ROLES = [['admin', 'Direction'], ['secretaire', 'Secrétariat'], ['enseignant', 'Enseignant'], ['surveillant', 'Surveillant général'], ['eleve', 'Élève'], ['parent', 'Parent']];
+const ROLES = [['admin', 'Direction'], ['secretaire', 'Secrétariat'], ['enseignant', 'Enseignant'], ['surveillant', 'Surveillant général'], ['eleve', 'Élève'], ['parent', 'Parent'], ['candidat', 'Famille candidate']];
 const ROLE_LABEL = Object.fromEntries(ROLES);
 
 /* Barème en 7 mentions, notes sur 20 */
@@ -88,27 +90,8 @@ const LABEL = {
 };
 const refLabel = (db, t, id) => { if (!id) return '—'; const r = db[t].find(x => x.id === id); return r ? LABEL[t](r, db) : '—'; };
 
-/* ---------- Mensualités et impayés ---------- */
-function monthsElapsed() {
-  const m = new Date().getMonth() + 1;
-  if (m >= 10) return m - 9;
-  if (m <= 6) return m + 3;
-  return m === 9 ? 0 : 9;
-}
-function studentDues(db, s) {
-  const fee = db.feeStructure.find(f => f.classId === s.classId) || { inscription: 0, mensualite: 0 };
-  const count = monthsElapsed();
-  const pays = db.payments.filter(p => p.studentId === s.id);
-  const sum = (type, mois) => pays.filter(p => p.type === type && (mois === undefined || p.mois === mois)).reduce((a, p) => a + (Number(p.montant) || 0), 0);
-  const byMonth = MOIS.map((m, i) => {
-    const paid = sum('Mensualité', m), due = i < count ? fee.mensualite : 0;
-    return { m, paid, due, status: i >= count ? 'fut' : paid >= fee.mensualite ? 'ok' : paid > 0 ? 'part' : 'no' };
-  });
-  const inscPaid = sum('Inscription');
-  const du = fee.inscription + fee.mensualite * count;
-  const applied = Math.min(inscPaid, fee.inscription) + byMonth.reduce((a, b) => a + Math.min(b.paid, b.due), 0);
-  return { fee, byMonth, inscPaid, du, paye: applied, reste: Math.max(0, du - applied) };
-}
+/* ---------- Mensualités et impayés (règle commune, voir shared/logic.js) ---------- */
+const monthsElapsed = monthsElapsed_, studentDues = studentDues_;
 
 /* ---------- Données de démonstration (stables, générées à partir d'une graine) ---------- */
 function rng(seed) {
@@ -127,7 +110,7 @@ function buildSeed() {
   const startY = mo >= 9 ? now.getFullYear() : now.getFullYear() - 1, annee = startY + '-' + (startY + 1);
   const wk = (d, step) => { while (dow(d) === 0 || dow(d) === 6) d = addDays(d, step); return d; };
 
-  db.settings.push({ id: 'main', ecole: 'Complexe scolaire Les Baobabs', adresse: 'Avenue Léopold Sédar Senghor, Dakar', tel: '33 000 00 00', email: 'contact@lesbaobabs.example', annee, devise: 'FCFA', noteMax: 20, notePassage: 10, responsable: 'Seydou Mbaye', slogan: 'Apprendre, grandir, réussir' });
+  db.settings.push({ id: 'main', ecole: 'Complexe scolaire Les Baobabs', adresse: 'Avenue Léopold Sédar Senghor, Dakar', tel: '33 000 00 00', email: 'contact@lesbaobabs.example', annee, devise: 'FCFA', noteMax: 20, notePassage: 10, responsable: 'Seydou Mbaye', slogan: 'Apprendre, grandir, réussir', indicatif: '221' });
 
   const SUB = [['Français', 'FR', 3, 5], ['Mathématiques', 'MATH', 3, 4], ['Anglais', 'ANG', 2, 3], ['Histoire-Géographie', 'HG', 2, 3], ['SVT', 'SVT', 2, 2], ['Physique-Chimie', 'PC', 2, 2], ['EPS', 'EPS', 1, 2]];
   SUB.forEach(s => db.subjects.push({ id: id('mat'), nom: s[0], code: s[1], coef: s[2] }));
@@ -198,18 +181,20 @@ function buildSeed() {
   });
   db.payments.sort((a, b) => a.date.localeCompare(b.date)).forEach((p, i) => { p.recu = 'REC-' + startY + '-' + pad(i + 1, 4); });
 
-  /* utilisateurs */
+  /* utilisateurs : l'identifiant de connexion est l'adresse e-mail, le téléphone ou le n° d'admission */
+  const U = (idu, email, nom, role, linkId, tel, extra) => Object.assign({ id: idu, email, nom, role, linkId, tel, actif: true, login: loginKey_(email || tel), mustChange: false, source: 'manuel', canaux: '' }, extra || {});
   db.users.push(
-    { id: 'u-admin', email: 'directeur@lesbaobabs.example', nom: 'Seydou Mbaye', role: 'admin', linkId: '', tel: '77 000 00 01', actif: true },
-    { id: 'u-sec', email: 'secretariat@lesbaobabs.example', nom: 'Khady Thiam', role: 'secretaire', linkId: '', tel: '77 000 00 02', actif: true },
-    { id: 'u-ens', email: db.teachers[0].email, nom: fullName(db.teachers[0]), role: 'enseignant', linkId: db.teachers[0].id, tel: db.teachers[0].tel, actif: true },
-    { id: 'u-sur', email: 'surveillance@lesbaobabs.example', nom: 'Idrissa Camara', role: 'surveillant', linkId: '', tel: '77 000 00 03', actif: true },
-    { id: 'u-eleve', email: 'eleve@lesbaobabs.example', nom: fullName(db.students[0]), role: 'eleve', linkId: db.students[0].id, tel: '', actif: true },
-    { id: 'u-parent', email: 'parent@lesbaobabs.example', nom: fullName(db.parents[0]), role: 'parent', linkId: db.parents[0].id, tel: db.parents[0].tel, actif: true });
+    U('u-admin', 'directeur@lesbaobabs.example', 'Seydou Mbaye', 'admin', '', '77 000 00 01'),
+    U('u-sec', 'secretariat@lesbaobabs.example', 'Khady Thiam', 'secretaire', '', '77 000 00 02'),
+    U('u-ens', db.teachers[0].email, fullName(db.teachers[0]), 'enseignant', db.teachers[0].id, db.teachers[0].tel),
+    U('u-sur', 'surveillance@lesbaobabs.example', 'Idrissa Camara', 'surveillant', '', '77 000 00 03'),
+    U('u-eleve', 'eleve@lesbaobabs.example', fullName(db.students[0]), 'eleve', db.students[0].id, ''),
+    U('u-parent', 'parent@lesbaobabs.example', fullName(db.parents[0]), 'parent', db.parents[0].id, db.parents[0].tel, { canaux: 'email,whatsapp' }),
+    U('u-cand', 'mame.sow@example.com', 'Mame Sow', 'candidat', '', '77 120 45 67', { source: 'inscription', canaux: 'whatsapp' }));
 
-  /* admissions */
+  /* admissions : la première vient d'une famille qui s'est inscrite en ligne (compte « candidat ») */
   [['Khadija', 'Sow', 'F', 'Mame', 'Sow', '77 120 45 67', 'Mère', 'En attente'], ['Pathé', 'Ndoye', 'M', 'Ablaye', 'Ndoye', '76 330 12 90', 'Père', 'En attente'], ['Yacine', 'Gomis', 'F', 'Rama', 'Gomis', '78 410 22 31', 'Mère', 'Refusé']].forEach((a, i) =>
-    db.admissions.push({ id: id('adm'), date: addDays(T, -3 - i * 2), nom: a[1], prenom: a[0], sexe: a[2], naissance: (startY - 11) + '-0' + (i + 3) + '-12', classId: db.classes[0].id, parentPrenom: a[3], parentNom: a[4], parentTel: a[5], lien: a[6], statut: a[7], remarque: a[7] === 'Refusé' ? 'Effectif complet' : '', studentId: '' }));
+    db.admissions.push({ id: id('adm'), date: addDays(T, -3 - i * 2), nom: a[1], prenom: a[0], sexe: a[2], naissance: (startY - 11) + '-0' + (i + 3) + '-12', classId: db.classes[0].id, parentPrenom: a[3], parentNom: a[4], parentTel: a[5], lien: a[6], statut: a[7], remarque: a[7] === 'Refusé' ? 'Effectif complet' : '', studentId: '', parentEmail: i === 0 ? 'mame.sow@example.com' : '', userId: i === 0 ? 'u-cand' : '', ref: 'INS-' + startY + '-' + pad(i + 1, 4), source: i === 0 ? 'en ligne' : 'secrétariat', extra: '' }));
 
   /* vie scolaire */
   db.notices.push(
@@ -256,12 +241,12 @@ function buildSeed() {
 
   db.audit.push({ id: id('aud'), at: H(26), user: 'Khady Thiam', action: 'créé', table: 'payments', rowId: '', detail: 'Encaissement mensualité' },
     { id: id('aud'), at: H(5), user: 'Seydou Mbaye', action: 'modifié', table: 'notices', rowId: '', detail: 'Avis épinglé' });
-  db.__v = 1;
+  db.__v = 2;
   return db;
 }
 
 /* ---------- Accès aux données ---------- */
-const LS_KEY = 'scolaria-demo-v1';
+const LS_KEY = 'scolaria-demo-v2';
 const lsGet = () => { try { const s = localStorage.getItem(LS_KEY); return s ? JSON.parse(s) : null; } catch (e) { return null; } };
 const lsSet = db => { try { localStorage.setItem(LS_KEY, JSON.stringify(db)); } catch (e) { /* stockage indisponible : la démo reste en mémoire */ } };
 const lsClear = () => { try { localStorage.removeItem(LS_KEY); } catch (e) { /* ignore */ } };
@@ -272,7 +257,9 @@ const setToken = t => { TOKEN = t || ''; try { if (t) sessionStorage.setItem('sc
 const isAuthErr = e => e && /(^|\W)AUTH($|\W)/.test(e.message || '');
 const Api = IN_GAS ? {
   status: () => gas('apiStatus'),
-  async login(email, pwd) { const r = await gas('apiLogin', email, pwd); setToken(r.token); },
+  challenge: () => gas('apiChallenge'),
+  async register(form, connected) { const r = await gas('apiRegister', form, connected ? TOKEN : ''); if (r.session) { setToken(r.session.token); delete r.session; r.logged = true; } return r; },
+  async login(identifier, pwd) { const r = await gas('apiLogin', identifier, pwd); setToken(r.token); },
   async setup(email, nom, pwd) { const r = await gas('apiSetupAdmin', email, nom, pwd); setToken(r.token); },
   async logout() { try { await gas('apiLogout', TOKEN); } catch (e) { /* ignore */ } setToken(''); },
   hasToken: () => !!TOKEN,
@@ -287,10 +274,69 @@ const Api = IN_GAS ? {
   setPassword: (id, pwd) => gas('apiSetPassword', TOKEN, id, pwd),
   changePassword: (a, b) => gas('apiChangePassword', TOKEN, a, b),
   importAll: tables => gas('apiImportAll', TOKEN, tables),
-  email: (subject, body) => gas('apiEmailReport', TOKEN, subject, body)
+  email: (subject, body) => gas('apiEmailReport', TOKEN, subject, body),
+  admit: (id, classId, no) => gas('apiAdmit', TOKEN, id, classId, no),
+  setSecret: (canal, name, value) => gas('apiSetSecret', TOKEN, canal, name, value),
+  secretsStatus: () => gas('apiSecretsStatus', TOKEN),
+  testChannel: (canal, to) => gas('apiTestChannel', TOKEN, canal, to),
+  broadcast: spec => gas('apiBroadcast', TOKEN, spec),
+  remind: ids => gas('apiRemind', TOKEN, ids),
+  outboxMark: id => gas('apiOutboxMark', TOKEN, id)
 } : {
   async load(role) {
-    let db = lsGet(); if (!db || db.__v !== 1) { db = buildSeed(); lsSet(db); }
+    let db = lsGet(); if (!db || db.__v !== 2) { db = buildSeed(); lsSet(db); }
     return { db, me: db.users.find(u => u.role === (role || 'admin')) };
   }
+};
+
+/* ---------- Mode démonstration : le « serveur » est la même logique métier, appliquée à la copie locale ---------- */
+const demoHost = { uid, today: todayStr, pwd: () => ({ hash: '', salt: '' }), temp: () => Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(2, 12).padEnd(10, 'x') };
+function demoApply(db, ctx) {
+  const next = { ...db };
+  Object.keys(ctx.touched).forEach(t => {
+    const m = {}; Object.keys(ctx.touched[t]).forEach(id => { m[id] = normRow(t, ctx.touched[t][id]); });
+    const have = new Set(db[t].map(x => x.id));
+    next[t] = [...db[t].map(x => m[x.id] || x), ...Object.values(m).filter(x => !have.has(x.id))];
+  });
+  return next;
+}
+function demoRun(db, fn) {
+  const copy = {}; Object.keys(db).forEach(t => { copy[t] = Array.isArray(db[t]) ? db[t].slice() : db[t]; });
+  const ctx = { db: copy, touched: {}, h: demoHost }, res = fn(ctx);
+  return { res, db: demoApply(db, ctx) };
+}
+/* Rien ne part vraiment en démonstration, sauf les liens manuels (SMS, WhatsApp) qui s'ouvrent pour de bon. */
+function demoSend(db, plan, label) {
+  const rows = plan.map(m => {
+    const ch = chanOf_(db, m.canal), manual = m.canal !== 'email' && ch.fournisseur === 'lien', withSecret = (m.secrets || []).some(x => x && m.texte.indexOf(x) >= 0);
+    return normRow('outbox', { id: uid(), at: new Date().toISOString(), canal: m.canal, fournisseur: ch.fournisseur, to: m.to, nom: m.nom, event: m.event, statut: manual ? 'À envoyer' : 'Simulé', detail: manual ? 'Ouvrez le lien pour envoyer le message depuis un téléphone.' : 'Mode démonstration : rien n’est réellement envoyé.', texte: (m.secrets || []).reduce((t, x) => x ? t.split(x).join('••••••') : t, m.texte).slice(0, 600), lien: manual && !withSecret ? manualLink_(m.canal, m.to, m.texte) : '' });
+  });
+  return { db: { ...db, outbox: [...db.outbox, ...rows], audit: [...db.audit, { id: uid(), at: new Date().toISOString(), user: label.user, action: 'créé', table: 'outbox', rowId: '', detail: label.text + ' : ' + rows.length + ' message(s)' }] }, rows };
+}
+const Demo = {
+  register(db, form, me) {
+    const r = demoRun(db, ctx => {
+      const out = registerCore_(ctx, form, me);
+      ctx.db.users = ctx.db.users.slice();
+      return out;
+    });
+    let next = r.db, plan = [];
+    const par = r.res.parent;
+    plan = plan.concat(planMessages_(next, 'inscription_recue', [{ nom: fullName_(par), tel: par.tel, email: par.email, canaux: r.res.user.canaux }], { parent: fullName_(par), eleve: r.res.admissions.map(a => a.prenom + ' ' + a.nom).join(' et '), ref: r.res.refs.join(', '), identifiant: r.res.user.login || r.res.user.email }));
+    const tplOn = tplOf_(next, 'inscription_recue').actif; if (!tplOn) plan = [];
+    r.res.admitted.forEach(a => { plan = plan.concat(admissionPlan_(next, a)); });
+    next = demoSend(next, plan, { user: 'Inscription en ligne', text: 'Messages d’inscription' }).db;
+    const comptes = []; r.res.admitted.forEach(a => a.comptes.forEach(x => { if (x.nouveau && x.pwd) comptes.push({ role: x.role, nom: x.nom, login: x.login, pwd: x.pwd }); }));
+    const user = next.users.find(u => u.id === r.res.user.id);
+    next = { ...next, audit: [...next.audit, { id: uid(), at: new Date().toISOString(), user: 'Inscription en ligne', action: 'créé', table: 'admissions', rowId: '', detail: r.res.refs.join(', ') }] };
+    return { db: next, out: { ok: true, refs: r.res.refs, admis: r.res.admitted.length, comptes, user } };
+  },
+  admit(db, admissionId, classId, no, actor) {
+    const r = demoRun(db, ctx => admitCore_(ctx, admissionId, { classId, admission: no }));
+    let next = demoSend(r.db, admissionPlan_(r.db, r.res), { user: actor, text: 'Message d’admission' }).db;
+    next = { ...next, audit: [...next.audit, { id: uid(), at: new Date().toISOString(), user: actor, action: 'créé', table: 'students', rowId: r.res.student.id, detail: 'Admission de ' + fullName_(r.res.student) }] };
+    return { db: next, out: { student: r.res.student, parent: r.res.parent, classe: r.res.classe.nom, comptes: r.res.comptes } };
+  },
+  broadcast(db, spec, actor) { const b = broadcastPlan_(db, spec), s = demoSend(db, b.plan, { user: actor, text: 'Envoi groupé' }); if (!b.plan.length) throw new Error('Aucun destinataire joignable avec ces canaux. Vérifiez les numéros et adresses, et les préférences de contact.'); const sum = summarize_(s.rows.map(r => r.statut === 'Simulé' ? { ...r, statut: 'Envoyé' } : r)); sum.destinataires = b.recs.length; sum.simule = true; return { db: s.db, out: sum }; },
+  remind(db, ids, actor) { const plan = remindPlan_(db, ids); if (!plan.length) throw new Error('Aucun destinataire joignable avec ces canaux. Vérifiez les numéros et adresses, et les préférences de contact.'); const s = demoSend(db, plan, { user: actor, text: 'Rappels de mensualité' }); const sum = summarize_(s.rows.map(r => r.statut === 'Simulé' ? { ...r, statut: 'Envoyé' } : r)); sum.simule = true; return { db: s.db, out: sum }; }
 };

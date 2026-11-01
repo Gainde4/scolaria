@@ -5,7 +5,9 @@ import json, glob, os, sys, shutil
 root = os.path.dirname(os.path.abspath(__file__))
 schema = open(f'{root}/src/schema.json', encoding='utf-8').read().strip()
 schema_js = json.dumps(json.loads(schema), ensure_ascii=False)
-js = '\n'.join(open(f, encoding='utf-8').read() for f in sorted(glob.glob(f'{root}/src/js/*.js'))).replace('__SCHEMA__', schema_js)
+shared = '\n'.join(open(f, encoding='utf-8').read() for f in sorted(glob.glob(f'{root}/src/shared/*.js')))
+js = '\n'.join(open(f, encoding='utf-8').read() for f in sorted(glob.glob(f'{root}/src/js/*.js')))
+js = js.replace('/*__SHARED__*/', shared).replace('__SCHEMA__', schema_js)
 css = open(f'{root}/src/style.css', encoding='utf-8').read()
 FONTS = '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">'
 CDN = ['https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js',
@@ -23,7 +25,7 @@ open(f'{root}/dist/index.html', 'w', encoding='utf-8').write(art)
 # 2) Google Apps Script
 gas_html = f'<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Scolaria</title>{FONTS}<style>\nbody{{margin:0}}\n{css}\n</style></head><body>{BODY}{libs(False)}<script>\n{js}\n</script></body></html>'
 open(f'{root}/dist/gas/Index.html', 'w', encoding='utf-8').write(gas_html)
-code = open(f'{root}/backend/Code.gs', encoding='utf-8').read().replace('__SCHEMA__', schema_js)
+code = open(f'{root}/backend/Code.gs', encoding='utf-8').read().replace('/*__SHARED__*/', shared).replace('__SCHEMA__', schema_js)
 open(f'{root}/dist/gas/Code.gs', 'w', encoding='utf-8').write(code)
 shutil.copy(f'{root}/backend/appsscript.json', f'{root}/dist/gas/appsscript.json')
 shutil.copy(f'{root}/docs/DEPLOIEMENT.md', f'{root}/dist/gas/LISEZMOI.md')

@@ -300,15 +300,22 @@ function HallTicketsPage() {
 
 /* ---------- Mensualités ---------- */
 function DuesPage() {
-  const app = useApp(); const { db, me } = app, kids = me.role === 'parent' ? myKids(app) : null;
-  const [cid, setCid] = useState(''), [q, setQ] = useState(''), [only, setOnly] = useState(false);
+  const app = useApp(); const { db, me, can, ask, notify } = app, kids = me.role === 'parent' ? myKids(app) : null;
+  const [cid, setCid] = useState(''), [q, setQ] = useState(''), [only, setOnly] = useState(false), [busy, setBusy] = useState(false);
   let studs = db.students.filter(s => s.statut === 'Actif' && (!kids || kids.some(k => k.id === s.id)) && (!cid || s.classId === cid)).sort(byName);
   if (q.trim()) studs = studs.filter(s => fullName(s).toLowerCase().includes(q.trim().toLowerCase()));
   let rows = studs.map(s => ({ s, d: studentDues(db, s) })); if (only) rows = rows.filter(r => r.d.reste > 0);
   const total = rows.reduce((a, r) => a + r.d.reste, 0), n = monthsElapsed();
   const lab = { ok: 'Payé', part: 'Partiel', no: 'Impayé', fut: 'À venir' };
+  const debtors = rows.filter(r => r.d.reste > 0);
+  const remind = async () => {
+    const ok = await ask({ title: 'Relancer les parents ?', message: debtors.length + ' élève(s) affiché(s) ont un reste à payer. Un message de rappel part aux parents par les canaux cochés dans « Canaux de communication » (message « Rappel de mensualité »). Les parents qui ont choisi de ne pas recevoir un canal sont ignorés.', submit: 'Envoyer les rappels' });
+    if (!ok) return; setBusy(true);
+    try { const r = await app.remind(debtors.map(x => x.s.id)); await ask({ title: 'Rappels préparés', noCancel: true, submit: 'Fermer', extra: () => html`<${SendSummary} r=${r} />` }); } catch (e) { notify(e.message, 'bad'); }
+    setBusy(false);
+  };
   return html`<section>
-    <${PageHead} title="Suivi des mensualités" sub=${'Situation de chaque élève, mois par mois (' + MOIS[0] + ' à ' + MOIS[8] + '). Les mois à venir ne comptent pas encore dans le reste dû.'} />
+    <${PageHead} title="Suivi des mensualités" sub=${'Situation de chaque élève, mois par mois (' + MOIS[0] + ' à ' + MOIS[8] + '). Les mois à venir ne comptent pas encore dans le reste dû.'}>${!kids && can('messages', 'create') && debtors.length > 0 && html`<${Btn} icon="send" disabled=${busy} onClick=${remind}>Relancer les parents (${debtors.length})<//>`}<//>
     <div className="card flush"><div className="toolbar">
       <label className="search"><${Icon} n="search" s=${16} /><input type="search" id="dues-q" placeholder="Rechercher un élève…" value=${q} onChange=${e => setQ(e.target.value)} aria-label="Rechercher" /></label>
       ${!kids && html`<select id="dues-class" aria-label="Classe" value=${cid} onChange=${e => setCid(e.target.value)}><option value="">Classe : toutes</option>${sortedClasses(db).map(c => html`<option key=${c.id} value=${c.id}>${c.nom}</option>`)}</select>`}
@@ -359,7 +366,7 @@ function ReportsPage() {
   const since = addDays(todayStr(), -30), att = db.attendance.filter(a => a.classId === cid && a.date >= since), here = att.filter(a => a.statut === 'Présent' || a.statut === 'Retard').length;
   const top = [...graded].sort((a, b) => b.moy - a.moy).slice(0, 3), weak = graded.filter(r => r.moy < 8);
   const dues = can('payments', 'view') ? studs.map(s => ({ s, d: studentDues(db, s) })).filter(x => x.d.reste > 0) : [];
-  const conduct = db.conduct.filter(c => studs.some(s => s.id === c.studentId));
+  const seeConduct = can('conduct', 'view'), conduct = seeConduct ? db.conduct.filter(c => studs.some(s => s.id === c.studentId)) : [];
   const girls = studs.filter(s => s.sexe === 'F').length;
   const body = () => '<h2>Rapport de classe — ' + clsName(db, cid) + '</h2><ul><li>Effectif : ' + studs.length + ' (' + girls + ' filles, ' + (studs.length - girls) + ' garçons)</li><li>Présence sur 30 jours : ' + (att.length ? dec(here / att.length * 100, 1) + ' %' : 'n/d') + '</li><li>Moyenne de classe (' + (session || 'aucune session') + ') : ' + (avg === null ? 'n/d' : dec(avg)) + '</li><li>Taux de réussite : ' + (pass === null ? 'n/d' : dec(pass, 0) + ' %') + '</li><li>Élèves en grande difficulté (< 8) : ' + weak.length + '</li><li>Élèves avec impayés : ' + dues.length + '</li></ul>';
   const email = async () => {
@@ -367,7 +374,7 @@ function ReportsPage() {
     try { await Api.email('Rapport de classe — ' + clsName(db, cid), body()); notify('Rapport envoyé à la direction'); } catch (e) { notify('Envoi impossible : ' + e.message, 'bad'); }
   };
   return html`<section>
-    <${PageHead} title="Rapports de classe" sub="Vue d’ensemble d’une classe : effectifs, assiduité, résultats, conduite et impayés.">${can('reports', 'edit') && html`<${Btn} icon="mail" onClick=${email}>Envoyer par e-mail<//>`}${printBtn()}<//>
+    <${PageHead} title="Rapports de classe" sub="Vue d’ensemble d’une classe : effectifs, assiduité, résultats, conduite et impayés.">${can('reports', 'modify') && html`<${Btn} icon="mail" onClick=${email}>Envoyer par e-mail<//>`}${printBtn()}<//>
     <div className="card flush"><div className="toolbar"><${ClassSelect} id="rp-class" classes=${classes} value=${cid} onChange=${setCid} /><span className="grow"></span><span className="count">${session ? 'Dernière session notée : ' + session : 'Aucune note saisie'}</span></div></div>
     <div className="kpis">
       <${Kpi} l="Effectif" v=${studs.length} sub=${girls + ' filles · ' + (studs.length - girls) + ' garçons'} icon="users" />
@@ -378,21 +385,21 @@ function ReportsPage() {
     <div className="grid2">
       <div className="card"><h2 className="card-title">Meilleurs résultats</h2>${top.length ? html`<ol className="rank">${top.map(r => html`<li key=${r.s.id}><span>${fullName(r.s)}</span><strong className="mono">${dec(r.moy)}</strong>${B(mention(r.moy)[2], mention(r.moy)[1])}</li>`)}</ol>` : html`<p className="muted">Pas encore de résultats.</p>`}
         <h2 className="card-title sp">En grande difficulté <small>(moyenne ${'<'} 8)</small></h2>${weak.length ? html`<ol className="rank">${weak.map(r => html`<li key=${r.s.id}><span>${fullName(r.s)}</span><strong className="mono">${dec(r.moy)}</strong></li>`)}</ol>` : html`<p className="muted">Aucun élève sous 8 de moyenne.</p>`}</div>
-      <div className="card"><h2 className="card-title">Vie de classe</h2><ul className="facts"><li><span>Mentions de conduite</span><strong className="mono">${conduct.length}</strong></li><li><span>Sanctions (retenue, blâme, exclusion)</span><strong className="mono">${conduct.filter(c => ['Retenue', 'Blâme', 'Exclusion temporaire'].includes(c.type)).length}</strong></li><li><span>Éloges</span><strong className="mono">${conduct.filter(c => c.type === 'Éloge').length}</strong></li>${can('payments', 'view') && html`<li><span>Élèves avec impayés</span><strong className="mono">${dues.length}</strong></li><li><span>Montant à recouvrer</span><strong className="mono">${money(dues.reduce((a, x) => a + x.d.reste, 0))}</strong></li>`}</ul></div>
+      <div className="card"><h2 className="card-title">Vie de classe</h2><ul className="facts">${seeConduct && html`<li><span>Mentions de conduite</span><strong className="mono">${conduct.length}</strong></li><li><span>Sanctions (retenue, blâme, exclusion)</span><strong className="mono">${conduct.filter(c => ['Retenue', 'Blâme', 'Exclusion temporaire'].includes(c.type)).length}</strong></li><li><span>Éloges</span><strong className="mono">${conduct.filter(c => c.type === 'Éloge').length}</strong></li>`}${can('payments', 'view') && html`<li><span>Élèves avec impayés</span><strong className="mono">${dues.length}</strong></li><li><span>Montant à recouvrer</span><strong className="mono">${money(dues.reduce((a, x) => a + x.d.reste, 0))}</strong></li>`}</ul></div>
     </div></section>`;
 }
 
 /* ---------- Plaintes anonymes ---------- */
 CFG.complaints = {
   key: 'complaints', icon: 'shield', title: 'Plaintes anonymes', sub: 'Signalements déposés sans nom. La direction suit leur traitement et répond ici.', nl: 'Nouvelle plainte', singular: 'plainte', rowTitle: () => 'plainte',
-  fields: [dateF('date', 'Date'), { k: 'categorie', l: 'Catégorie', t: 'select', o: ['Cantine', 'Discipline', 'Enseignement', 'Sécurité', 'Transport', 'Autre'], req: true }, { k: 'message', l: 'Message', t: 'area', req: true, rows: 4 }, { k: 'statut', l: 'Traitement', t: 'select', o: ['Nouvelle', 'En cours', 'Résolue'], req: true }, { k: 'reponse', l: 'Réponse de l’école', t: 'area' }],
+  fields: [dateF('date', 'Date'), { k: 'categorie', l: 'Catégorie', t: 'select', o: LISTF('complaints.categorie'), req: true }, { k: 'message', l: 'Message', t: 'area', req: true, rows: 4 }, { k: 'statut', l: 'Traitement', t: 'select', o: ['Nouvelle', 'En cours', 'Résolue'], req: true }, { k: 'reponse', l: 'Réponse de l’école', t: 'area' }],
   defaults: () => ({ date: todayStr(), statut: 'Nouvelle' }),
   cols: [{ l: 'Date', v: c => fmtDate(c.date) }, 'categorie', { l: 'Message', v: c => c.message }, { l: 'Traitement', v: c => c.statut, r: c => B(c.statut === 'Résolue' ? 'ok' : c.statut === 'En cours' ? 'info' : 'warn', c.statut) }, { l: 'Réponse', v: c => c.reponse }],
   filters: [{ k: 'statut', l: 'Traitement', t: 'select', o: ['Nouvelle', 'En cours', 'Résolue'] }], sort: (a, b) => b.date.localeCompare(a.date)
 };
 function ComplaintsPage() {
   const app = useApp(); const { can, ask, save, notify } = app;
-  if (can('complaints', 'edit')) return html`<${CrudPage} cfg=${CFG.complaints} />`;
+  if (can('complaints', 'modify')) return html`<${CrudPage} cfg=${CFG.complaints} />`;
   const send = async () => {
     const v = await ask({ title: 'Déposer une plainte anonyme', message: 'Aucun nom, compte ou adresse n’est enregistré avec ce message.', fields: [{ k: 'categorie', l: 'Catégorie', t: 'select', o: CFG.complaints.fields[1].o, req: true }, { k: 'message', l: 'Votre message', t: 'area', req: true, rows: 5 }], submit: 'Envoyer' });
     if (!v) return; await save('complaints', { date: todayStr(), categorie: v.categorie, message: v.message, statut: 'Nouvelle', reponse: '' }); notify('Votre message a été transmis à la direction');
@@ -402,13 +409,22 @@ function ComplaintsPage() {
 }
 
 /* ---------- Mon espace (élèves et parents) ---------- */
+const ADM_TXT = { 'En attente': ['warn', 'En cours d’examen'], 'Admis': ['ok', 'Admis'], 'Refusé': ['bad', 'Non retenu'] };
+function MyApplications() {
+  const app = useApp(); const { db, me } = app, mine = db.admissions.filter(a => a.userId === me.id).sort((a, b) => b.date.localeCompare(a.date) || b.ref.localeCompare(a.ref));
+  if (!mine.length && !app.regOpen) return null;
+  return html`<div className="card"><h2 className="card-title">Mes demandes d’inscription</h2>
+    ${mine.length ? html`<div className="tablewrap"><table className="t compact stack"><thead><tr><th>Référence</th><th>Enfant</th><th>Classe demandée</th><th>Décision</th></tr></thead><tbody>${mine.map(a => html`<tr key=${a.id}><td className="mono" data-l="Référence">${a.ref}</td><td data-l="Enfant">${fullName(a)}</td><td data-l="Classe demandée">${clsName(db, a.classId)}</td><td data-l="Décision">${B(ADM_TXT[a.statut][0], ADM_TXT[a.statut][1])}</td></tr>`)}</tbody></table></div>` : html`<p className="muted">Aucune demande pour le moment.</p>`}
+    ${app.regOpen && FAMILY_ROLES.indexOf(me.role) >= 0 && html`<div className="form-foot left"><${Btn} icon="plus" onClick=${app.addChild}>Inscrire un enfant<//></div>`}</div>`;
+}
 function FamilyHome() {
-  const app = useApp(); const { db, me, go } = app, kids = myKids(app), t = todayStr();
+  const app = useApp(); const { db, me, go } = app, kids = myKids(app), t = todayStr(), cand = me.role === 'candidat', st = db.settings[0] || {};
   const notices = CFG.notices.scope(db.notices, app).sort(CFG.notices.sort).slice(0, 3);
   const next = db.events.filter(e => (e.fin || e.date) >= t).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 3);
   return html`<section>
-    <${PageHead} title=${'Bonjour ' + (me.nom || '').split(' ')[0]} sub=${me.role === 'parent' ? 'Le suivi de la scolarité de vos enfants.' : 'Votre scolarité en un coup d’œil.'} />
-    ${!kids.length && html`<${Empty} icon="users" title="Aucun élève lié à ce compte">Demandez au secrétariat de relier votre compte à la fiche élève.<//>`}
+    <${PageHead} title=${'Bonjour ' + (me.nom || '').split(' ')[0]} sub=${cand ? 'Suivez l’examen de votre demande d’inscription.' : me.role === 'parent' ? 'Le suivi de la scolarité de vos enfants.' : 'Votre scolarité en un coup d’œil.'} />
+    ${cand && html`<div className="card note-info"><${Icon} n="bell" s=${20} /><div><strong>Votre dossier est entre les mains du secrétariat.</strong><p className="muted">Dès que l’admission est prononcée, vous recevez un message et cet espace s’ouvre : emploi du temps, notes, présences et paiements de votre enfant. ${(st.tel || st.email) ? 'Une question ? ' + [st.tel, st.email].filter(Boolean).join(' · ') : ''}</p></div></div>`}
+    ${!cand && !kids.length && html`<${Empty} icon="users" title="Aucun élève lié à ce compte">Demandez au secrétariat de relier votre compte à la fiche élève.<//>`}
     <div className="kids">${kids.map(s => {
     const att = db.attendance.filter(a => a.studentId === s.id), here = att.filter(a => a.statut === 'Présent' || a.statut === 'Retard').length;
     const sess = sessionsWithMarks(db, s.classId)[0], r = sess ? computeResults(db, s.classId, sess).rows.find(x => x.s.id === s.id) : null, d = studentDues(db, s);
@@ -416,19 +432,20 @@ function FamilyHome() {
     return html`<article key=${s.id} className="card kid"><header><div className="avatar">${(s.prenom[0] || '') + (s.nom[0] || '')}</div><div><h2>${fullName(s)}</h2><span className="muted">${clsName(db, s.classId)} · ${s.admission}</span></div></header>
       <dl><div><dt>Assiduité</dt><dd className="mono">${att.length ? dec(here / att.length * 100, 1) + ' %' : '—'}</dd></div>
       <div><dt>Moyenne ${sess ? '(' + sess + ')' : ''}</dt><dd className="mono">${r && r.moy !== null ? dec(r.moy) + ' · ' + r.rang + (r.rang === 1 ? 'er' : 'e') : '—'}</dd></div>
-      ${me.role === 'parent' && html`<div><dt>Reste à payer</dt><dd className=${'mono' + (d.reste ? ' due' : '')}>${d.reste ? money(d.reste) : 'À jour'}</dd></div>`}
+      ${app.can('dues', 'view') && html`<div><dt>Reste à payer</dt><dd className=${'mono' + (d.reste ? ' due' : '')}>${d.reste ? money(d.reste) : 'À jour'}</dd></div>`}
       <div><dt>Prochaine épreuve</dt><dd>${ex ? fmtDate(ex.date) + ' · ' + ((db.subjects.find(x => x.id === ex.subjectId) || {}).nom || '') : '—'}</dd></div></dl>
-      <div className="kid-actions"><${Btn} sm onClick=${() => go('results')}>Résultats<//><${Btn} sm onClick=${() => go('timetable')}>Emploi du temps<//>${me.role === 'parent' && html`<${Btn} sm onClick=${() => go('dues')}>Mensualités<//>`}</div></article>`;
+      <div className="kid-actions">${app.can('results', 'view') && html`<${Btn} sm onClick=${() => go('results')}>Résultats<//>`}${app.can('timetable', 'view') && html`<${Btn} sm onClick=${() => go('timetable')}>Emploi du temps<//>`}${app.can('dues', 'view') && html`<${Btn} sm onClick=${() => go('dues')}>Mensualités<//>`}</div></article>`;
   })}</div>
+    <${MyApplications} />
     <div className="grid2"><div className="card"><h2 className="card-title">Avis de l’école</h2>${notices.length ? notices.map(n => html`<div key=${n.id} className="mininote"><strong>${n.titre}</strong><span className="muted">${fmtDate(n.date)}</span><p>${n.contenu}</p></div>`) : html`<p className="muted">Aucun avis.</p>`}</div>
       <div className="card"><h2 className="card-title">À venir</h2>${next.length ? html`<ul className="evlist">${next.map(e => html`<li key=${e.id}><span className="mono">${fmtDate(e.date)}</span><span>${e.titre}</span>${B(EVT_TONE[e.categorie] || 'mute', e.categorie)}</li>`)}</ul>` : html`<p className="muted">Aucun événement à venir.</p>`}</div></div>
   </section>`;
 }
 
 /* ---------- Paramètres, profil, journal d'audit ---------- */
-const SETTINGS_FIELDS = [{ k: 'ecole', l: 'Nom de l’établissement', req: true, w: 'full' }, { k: 'slogan', l: 'Devise de l’école', w: 'full' }, { k: 'adresse', l: 'Adresse', w: 'full' }, { k: 'tel', l: 'Téléphone' }, { k: 'email', l: 'E-mail', t: 'email' }, { k: 'annee', l: 'Année scolaire', req: true, ph: '2026-2027', check: v => /^\d{4}-\d{4}$/.test(v) ? '' : 'Format attendu : 2026-2027' }, { k: 'responsable', l: 'Directeur ou directrice' }, { k: 'devise', l: 'Devise monétaire', req: true }, { k: 'notePassage', l: 'Note de passage (sur 20)', t: 'num', min: 0, max: 20, step: 0.5, req: true }];
+const SETTINGS_FIELDS = [{ k: 'ecole', l: 'Nom de l’établissement', req: true, w: 'full' }, { k: 'slogan', l: 'Devise de l’école', w: 'full' }, { k: 'adresse', l: 'Adresse', w: 'full' }, { k: 'tel', l: 'Téléphone' }, { k: 'email', l: 'E-mail', t: 'email' }, { k: 'annee', l: 'Année scolaire', req: true, ph: '2026-2027', check: v => /^\d{4}-\d{4}$/.test(v) ? '' : 'Format attendu : 2026-2027' }, { k: 'responsable', l: 'Directeur ou directrice' }, { k: 'devise', l: 'Devise monétaire', req: true }, { k: 'notePassage', l: 'Note de passage (sur 20)', t: 'num', min: 0, max: 20, step: 0.5, req: true }, { k: 'indicatif', l: 'Indicatif téléphonique du pays', ph: '221', hint: 'Sert à écrire les numéros au format international pour les SMS et WhatsApp (221 = Sénégal).', check: v => /^\d{1,4}$/.test(v || '') ? '' : 'Chiffres seulement, par exemple 221' }];
 function SettingsPage() {
-  const app = useApp(); const { db, save, notify, resetDemo, ask } = app, [v, setV] = useState({ ...(db.settings[0] || { id: 'main', noteMax: 20 }) }), [err, setErr] = useState({}), [per, setPer] = useState(false);
+  const app = useApp(); const { db, save, notify, resetDemo, ask } = app, [v, setV] = useState({ ...(db.settings[0] || { id: 'main', noteMax: 20 }), indicatif: (db.settings[0] || {}).indicatif || '221' }), [err, setErr] = useState({}), [per, setPer] = useState(false);
   const submit = async e => { e.preventDefault(); const er = validateFields(SETTINGS_FIELDS, v, db); setErr(er); if (Object.keys(er).length) return; await save('settings', { ...v, id: v.id || 'main' }); notify('Paramètres enregistrés'); };
   const reset = async () => { const ok = await ask({ title: 'Réinitialiser la démonstration ?', message: 'Toutes les modifications faites dans cette démonstration seront perdues et les données d’exemple reviendront.', submit: 'Réinitialiser', danger: true }); if (ok) { resetDemo(); notify('Données d’exemple restaurées'); } };
   return html`<section><${PageHead} title="Paramètres" sub="Identité de l’établissement, année scolaire et règles de notation." />
@@ -438,15 +455,23 @@ function SettingsPage() {
     ${!IN_GAS && html`<div className="card"><h2 className="card-title">Démonstration</h2><p className="muted">Les données de cette démonstration sont gardées dans votre navigateur. Sur Google Apps Script, elles sont stockées dans votre feuille Google Sheets.</p><${Btn} tone="danger" onClick=${reset}>Réinitialiser les données d’exemple<//></div>`}
     ${per && html`<${PeriodsEditor} onClose=${() => setPer(false)} />`}</section>`;
 }
+const CH_ALL = ['email', 'sms', 'whatsapp'];
 function ProfilePage() {
   const app = useApp(); const { db, me, save, notify } = app, rec = db.users.find(u => u.id === me.id) || me;
-  const F_ = [{ k: 'nom', l: 'Nom complet', req: true }, { k: 'tel', l: 'Téléphone', t: 'tel', check: PHONE }];
-  const [v, setV] = useState({ nom: rec.nom, tel: rec.tel || '' }), [err, setErr] = useState({});
+  const F_ = [{ k: 'nom', l: 'Nom complet', req: true }, { k: 'tel', l: 'Téléphone', t: 'tel', check: PHONE, hint: 'Utilisé pour les messages SMS et WhatsApp.' }];
+  const pref = rec.canaux ? rec.canaux.split(',').filter(x => CH_ALL.includes(x)) : [];
+  const [v, setV] = useState({ nom: rec.nom, tel: rec.tel || '' }), [err, setErr] = useState({}), [canaux, setCanaux] = useState(pref.length ? pref : CH_ALL);
   const linked = me.role === 'enseignant' ? db.teachers.find(t => t.id === me.linkId) : me.role === 'eleve' ? db.students.find(s => s.id === me.linkId) : me.role === 'parent' ? db.parents.find(p => p.id === me.linkId) : null;
-  const submit = async e => { e.preventDefault(); const er = validateFields(F_, v, db); setErr(er); if (Object.keys(er).length) return; await save('users', { ...rec, ...v }); notify('Profil mis à jour'); };
-  return html`<section><${PageHead} title="Mon profil" sub="Vos informations personnelles et votre rôle dans l’application." />
-    <div className="grid2"><form className="card" onSubmit=${submit}><h2 className="card-title">Modifier mes informations</h2><${FormFields} fields=${F_} values=${v} set=${(k, x) => setV(p => ({ ...p, [k]: x }))} db=${db} errors=${err} /><div className="form-foot"><${Btn} tone="primary" onClick=${submit}>Enregistrer<//></div></form>
-      <div className="card"><h2 className="card-title">Compte</h2><ul className="facts"><li><span>Adresse</span><strong>${rec.email}</strong></li><li><span>Rôle</span><strong>${B('accent', ROLE_LABEL[me.role])}</strong></li>${linked && html`<li><span>Fiche liée</span><strong>${fullName(linked)}</strong></li>`}${linked && linked.matricule && html`<li><span>Matricule</span><strong className="mono">${linked.matricule}</strong></li>`}${linked && linked.admission && html`<li><span>N° d’admission</span><strong className="mono">${linked.admission}</strong></li>`}</ul></div></div>
+  const toggle = c => setCanaux(x => x.includes(c) ? x.filter(y => y !== c) : [...x, c]);
+  const submit = async e => {
+    e.preventDefault(); const er = validateFields(F_, v, db); if (!canaux.length) er.canaux = 'Gardez au moins un moyen de contact'; setErr(er); if (Object.keys(er).length) return;
+    await save('users', { ...rec, ...v, canaux: canaux.length === CH_ALL.length ? '' : canaux.join(',') }); notify('Profil mis à jour');
+  };
+  return html`<section><${PageHead} title="Mon profil" sub="Vos informations personnelles, vos préférences de contact et votre rôle." />
+    <div className="grid2"><form className="card" onSubmit=${submit}><h2 className="card-title">Modifier mes informations</h2><${FormFields} fields=${F_} values=${v} set=${(k, x) => setV(p => ({ ...p, [k]: x }))} db=${db} errors=${err} />
+      <fieldset className="prefs"><legend>Comment l’école peut me joindre</legend>${CH_ALL.map(c => html`<label key=${c} className="check"><input type="checkbox" checked=${canaux.includes(c)} onChange=${() => toggle(c)} /> <span>${CHANNEL_DEFS[c].l}</span></label>`)}${err.canaux && html`<small className="err">${err.canaux}</small>`}<small className="hint">L’école n’utilise que les moyens cochés pour vos messages (rappels, avis, absences).</small></fieldset>
+      <div className="form-foot"><${Btn} tone="primary" onClick=${submit}>Enregistrer<//></div></form>
+      <div className="card"><h2 className="card-title">Compte</h2><ul className="facts"><li><span>Identifiant</span><strong>${rec.login || rec.email}</strong></li>${rec.email && rec.login !== rec.email && html`<li><span>E-mail</span><strong>${rec.email}</strong></li>`}<li><span>Rôle</span><strong>${B('accent', ROLE_LABEL[me.role])}</strong></li>${linked && html`<li><span>Fiche liée</span><strong>${fullName(linked)}</strong></li>`}${linked && linked.matricule && html`<li><span>Matricule</span><strong className="mono">${linked.matricule}</strong></li>`}${linked && linked.admission && html`<li><span>N° d’admission</span><strong className="mono">${linked.admission}</strong></li>`}</ul></div></div>
     ${IN_GAS && html`<div className="card"><h2 className="card-title">Mot de passe</h2><p className="muted">Choisissez un mot de passe que vous n’utilisez nulle part ailleurs.</p><${Btn} icon="shield" onClick=${async () => { const x = await app.ask({ title: 'Changer mon mot de passe', fields: [{ k: 'a', l: 'Mot de passe actuel', t: 'password', req: true }, { k: 'b', l: 'Nouveau mot de passe', t: 'password', req: true, hint: '8 caractères minimum.', check: y => y && y.length < 8 ? 'Au moins 8 caractères' : '' }], submit: 'Changer' }); if (!x) return; try { await Api.changePassword(x.a, x.b); notify('Mot de passe modifié'); } catch (e) { notify(e.message, 'bad'); } }}>Changer mon mot de passe<//></div>`}</section>`;
 }
 const TLAB = { payments: 'Encaissements', students: 'Élèves', parents: 'Parents', notices: 'Avis', marks: 'Notes', attendance: 'Présences', timetable: 'Emploi du temps', users: 'Utilisateurs', exams: 'Examens', tickets: 'Assistance', settings: 'Paramètres' };
