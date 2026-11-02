@@ -2,10 +2,11 @@
 
 Logiciel de gestion scolaire en français, conçu pour les écoles d'Afrique francophone : montants en FCFA, N° d'admission, notes sur 20 avec sept mentions, reçus avec le montant en lettres.
 
-Il fonctionne de deux façons à partir du même code :
+Il fonctionne de trois façons à partir du même code :
 
 - **Démo dans le navigateur** : ouvrez `dist/index.html`. Une école fictive est chargée, les données restent dans le navigateur, et un sélecteur « Voir en tant que » permet de passer d'un rôle à l'autre.
 - **Application réelle sur Google** : le classeur Google Sheets sert de base de données et Google Apps Script de serveur. Gratuit, sans hébergement. Voir [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
+- **Page sur Firebase Hosting** (facultatif) : la page est servie par Firebase (adresse courte, domaine personnalisé possible, en-têtes de sécurité stricts) ; les données et le serveur restent sur Apps Script. Gratuit, sans carte bancaire. Voir [docs/FIREBASE.md](docs/FIREBASE.md).
 
 Ce projet reproduit les fonctions présentées dans la vidéo « School Management System with All Modules » (Mohammad Rameez Imdad). Le code est une réalisation originale : seule la liste des fonctions a servi de point de départ.
 
@@ -52,7 +53,8 @@ backend/Code.gs      Serveur Google Apps Script : authentification, droits, acc�
 build.py             Assemble tout dans dist/
 dist/index.html      Page autonome (React chargé depuis un CDN)
 dist/gas/            Dossier prêt à coller dans Apps Script
-tests/               Tests du serveur et de l'interface
+dist/firebase/       Projet Firebase Hosting prêt à publier (page, config.js, firebase.json) ; src/firebase/ contient les modèles
+tests/               Tests du serveur et de l'interface ; gas-sim.js et gas-server.js exécutent le vrai Code.gs sur des services Google simulés
 ```
 
 L'interface est écrite en React sans étape de compilation (templates `htm`). Le fichier `build.py` concatène les sources, injecte le schéma et produit les fichiers de `dist/`.
@@ -63,7 +65,7 @@ L'interface est écrite en React sans étape de compilation (templates `htm`). L
 python3 build.py
 ```
 
-Le résultat est dans `dist/`. Ouvrez `dist/index.html` pour la démo, ou collez le contenu de `dist/gas/` dans Apps Script pour le déploiement réel.
+Le résultat est dans `dist/`. Ouvrez `dist/index.html` pour la démo, collez le contenu de `dist/gas/` dans Apps Script pour le déploiement réel, ou publiez `dist/firebase/` avec `firebase deploy --only hosting` (voir [docs/FIREBASE.md](docs/FIREBASE.md)). La version Firebase est construite seulement si `vendor/` existe (`npm install && npm run vendor`) ; elle est déjà fournie dans le dépôt.
 
 ## Tester
 
@@ -78,10 +80,11 @@ Si Chromium est déjà installé ailleurs, indiquez son chemin : `CHROMIUM_PATH=
 
 | Test | Ce qu'il vérifie |
 |---|---|
-| `tests/backend.test.js` | `Code.gs` face à une simulation de l'API Google (classeur, cache, courrier, réseau Twilio et passerelle) : connexion et blocage, filtrage des données par rôle, matrice d'autorisations, inscription publique, admission et comptes automatiques, champs personnalisés, canaux et clés d'API, quotas, performances |
+| `tests/backend.test.js` | `Code.gs` (y compris la porte d'entrée HTTP `doPost` et sa liste blanche de fonctions) face à une simulation de l'API Google (classeur, cache, courrier, réseau Twilio et passerelle) : connexion et blocage, filtrage des données par rôle, matrice d'autorisations, inscription publique, admission et comptes automatiques, champs personnalisés, canaux et clés d'API, quotas, performances |
 | `tests/ui_smoke.py` | Tous les écrans s'affichent pour chacun des 7 rôles, sans erreur JavaScript |
 | `tests/ui_flows.py` | Parcours métier : encaissement et reçu, appel, notes, admission, inscription en ligne, personnalisation des modules, matrice, canaux, envois |
 | `tests/ui_gas.py` | Connexion, création du premier compte, inscription publique sans connexion, changement du mot de passe provisoire, avec une fausse API `google.script.run` |
+| `tests/ui_firebase.py` | Page Firebase de bout en bout : servie avec les vrais en-têtes de sécurité de `firebase.json`, elle appelle le vrai `Code.gs` par HTTP (création du compte, import, connexion, inscription publique, un script injecté est bloqué, erreurs de configuration et de réseau) |
 
 ## Limites connues
 

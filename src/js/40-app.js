@@ -146,6 +146,7 @@ function App() {
     catch (e) { notify(e.message || String(e), 'bad'); }
   };
   const openPublicForm = async () => {
+    if (IN_GAS && !HAS_GOOGLE) { window.open(location.href.split('#')[0], '_blank', 'noopener,noreferrer'); return; }
     if (IN_GAS) { try { const url = await gas('apiAppUrl', TOKEN); window.open(url, '_blank', 'noopener,noreferrer'); } catch (e) { notify(e.message || String(e), 'bad'); } return; }
     openForm(false);
   };

@@ -508,10 +508,40 @@ const EVENTS = {
 
 
 /* ================= Page web ================= */
-function doGet() {
+function doGet(e) {
+  if (e && e.parameter && e.parameter.ping) return json_({ ok: true, app: 'Scolaria' }); // vérification de l'adresse depuis un navigateur
   return HtmlService.createHtmlOutputFromFile('Index')
     .setTitle('Scolaria')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+/* ================= Point d'entrée HTTP =================
+   Permet d'héberger la page ailleurs (Firebase Hosting, par exemple) : elle envoie {fn, args} en POST (texte brut, pour éviter la
+   requête de pré-vérification CORS que Apps Script ne sait pas traiter). Seules les fonctions listées ci-dessous sont appelables ;
+   chacune applique elle-même ses contrôles (jeton, rôle, droits), exactement comme avec google.script.run. */
+var MAX_BODY = 10 * 1024 * 1024;
+function json_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
+function api_() {
+  return {
+    apiStatus: apiStatus, apiChallenge: apiChallenge, apiRegister: apiRegister, apiSetupAdmin: apiSetupAdmin, apiLogin: apiLogin,
+    apiAppUrl: apiAppUrl, apiLogout: apiLogout, apiLoadAll: apiLoadAll, apiSave: apiSave, apiSaveMany: apiSaveMany, apiRemove: apiRemove,
+    apiSetPassword: apiSetPassword, apiChangePassword: apiChangePassword, apiImportAll: apiImportAll, apiEmailReport: apiEmailReport,
+    apiAdmit: apiAdmit, apiSetSecret: apiSetSecret, apiSecretsStatus: apiSecretsStatus, apiTestChannel: apiTestChannel,
+    apiBroadcast: apiBroadcast, apiRemind: apiRemind, apiOutboxMark: apiOutboxMark
+  };
+}
+function doPost(e) {
+  try {
+    var raw = (e && e.postData && e.postData.contents) || '';
+    if (raw.length > MAX_BODY) throw new Error('Requête trop volumineuse.');
+    var req = JSON.parse(raw || '{}'), table = api_(), fn = String(req.fn || '');
+    if (!Object.prototype.hasOwnProperty.call(table, fn)) throw new Error('Fonction inconnue.');
+    var args = Array.isArray(req.args) ? req.args : [];
+    if (args.length > 8) throw new Error('Trop d’arguments.');
+    return json_({ ok: true, data: table[fn].apply(null, args) });
+  } catch (err) {
+    return json_({ ok: false, error: String((err && err.message) || err) });
+  }
 }
 
 /* ================= Accès à la feuille (lectures mémorisées pendant une exécution) ================= */

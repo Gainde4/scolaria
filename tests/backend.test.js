@@ -36,7 +36,8 @@ const ctx = {
   MailApp: { sendEmail: m => { if (m.to === 'panne@ecole.sn') throw new Error('Adresse refusée'); mails.push(m); quota--; }, getRemainingDailyQuota: () => quota },
   PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] ?? null, setProperty: (k, v) => { props[k] = v; }, deleteProperty: k => { delete props[k]; } }) },
   UrlFetchApp: { fetch: (url, o) => { fetches.push({ url, o }); const r = fetchReply(url, o); return { getResponseCode: () => r.code, getContentText: () => r.body }; } },
-  ScriptApp: {}, HtmlService: {}
+  ScriptApp: {}, HtmlService: {},
+  ContentService: { MimeType: { JSON: 'json' }, createTextOutput: t => { const o = { _t: t, _m: '', setMimeType(m) { o._m = m; return o; }, getContent: () => t, getMimeType: () => o._m }; return o; } }
 };
 vm.createContext(ctx);
 const shared = fs.readFileSync(path.join(ROOT, 'src/shared/registry.js'), 'utf8') + '\n' + fs.readFileSync(path.join(ROOT, 'src/shared/logic.js'), 'utf8');
@@ -410,4 +411,33 @@ call('apiLoadAll', T); ok('schéma déjà prêt : démarrage sans passer par les
 const before2 = stats.writes; call('apiSaveMany', T, 'attendance', seed.attendance.slice(0, 120).map(a => ({ ...a, statut: 'Présent' })));
 ok('120 mises à jour groupées : une seule écriture de bloc', stats.writes - before2 <= 3, stats.writes - before2);
 const dataAtt = call('apiLoadAll', T).tables.attendance; ok('… et les données restent justes', dataAtt.filter(a => seed.attendance.slice(0, 120).some(s => s.id === a.id)).every(a => a.statut === 'Présent') && dataAtt.length === seed.attendance.length);
+/* =============== Point d'entrée HTTP (page hébergée sur Firebase) =============== */
+const hPost = (obj, raw) => { const out = ctx.doPost({ postData: { contents: raw !== undefined ? raw : JSON.stringify(obj) } }); return { out, body: JSON.parse(out.getContent()) }; };
+const hApiNames = [...fs.readFileSync(path.join(ROOT, 'backend/Code.gs'), 'utf8').matchAll(/^function (api[A-Z]\w*)\(/gm)].map(m => m[1]);
+const hListed = Object.keys(G('api_()'));
+ok('doPost : toutes les fonctions api* du serveur sont appelables, et rien d’autre', hApiNames.length >= 20 && hApiNames.every(n => hListed.includes(n)) && hListed.every(n => hApiNames.includes(n)), { manque: hApiNames.filter(n => !hListed.includes(n)), enTrop: hListed.filter(n => !hApiNames.includes(n)) });
+const hSt = hPost({ fn: 'apiStatus', args: [] });
+ok('doPost : réponse JSON { ok, data }', hSt.body.ok === true && hSt.body.data.hasUsers === true && hSt.out.getMimeType() === 'json', hSt.body);
+const hLg = hPost({ fn: 'apiLogin', args: ['dir@ecole.sn', 'motdepasse1'] });
+ok('doPost : connexion par HTTP, jeton renvoyé', hLg.body.ok === true && typeof hLg.body.data.token === 'string' && hLg.body.data.token.length > 20, hLg.body);
+const hLd = hPost({ fn: 'apiLoadAll', args: [hLg.body.data.token] });
+ok('doPost : lecture des données avec le jeton', hLd.body.ok === true && hLd.body.data.me.role === 'admin' && !hLd.body.data.me.hash, Object.keys(hLd.body));
+const hBad = hPost({ fn: 'apiLoadAll', args: ['jeton-bidon'] });
+ok('doPost : jeton invalide → erreur AUTH, détectée par le client', hBad.body.ok === false && /(^|\W)AUTH($|\W)/.test(hBad.body.error), hBad.body);
+const hLgBad = hPost({ fn: 'apiLogin', args: ['dir@ecole.sn', 'faux'] });
+ok('doPost : l’erreur métier remonte sans trace interne', hLgBad.body.ok === false && /incorrect/i.test(hLgBad.body.error) && !/at |\.gs|stack/i.test(hLgBad.body.error), hLgBad.body);
+['ensureAll_', 'hash_', 'auth_', 'persist_', 'loadDb_', 'weeklyReport', 'installWeeklyTrigger', 'doGet', 'doPost', 'constructor', '__proto__', 'toString', 'hasOwnProperty', 'api_', 'apiInconnue', '', 'eval'].forEach(fn => {
+  const r = hPost({ fn, args: [] });
+  ok('doPost : fonction non autorisée refusée (« ' + fn + ' »)', r.body.ok === false && /inconnue/i.test(r.body.error), r.body);
+});
+ok('doPost : JSON invalide → erreur propre', hPost(null, '{pas du json').body.ok === false);
+ok('doPost : corps vide → erreur propre', hPost(null, '').body.ok === false);
+ok('doPost : trop d’arguments refusé', /arguments/.test(hPost({ fn: 'apiStatus', args: [1, 2, 3, 4, 5, 6, 7, 8, 9] }).body.error));
+ok('doPost : arguments non tableau ignorés sans planter', hPost({ fn: 'apiStatus', args: 'x' }).body.ok === true);
+ok('doPost : corps démesuré refusé', /volumineuse/.test(hPost(null, 'x'.repeat(10 * 1024 * 1024 + 1)).body.error));
+ok('doGet ?ping=1 : vérification de l’adresse sans ouvrir l’application', JSON.parse(ctx.doGet({ parameter: { ping: '1' } }).getContent()).ok === true);
+// Le même contrôle des droits s'applique par HTTP : un enseignant ne peut pas lire les secrets ni changer un mot de passe
+const hSec = hPost({ fn: 'apiSecretsStatus', args: [tokT] });
+ok('doPost : un rôle non autorisé reste bloqué (clés d’API réservées à la direction)', hSec.body.ok === false && /Réservé/.test(hSec.body.error), hSec.body);
+
 console.log(`\n${pass}/${pass + fail} vérifications réussies`); process.exit(fail ? 1 : 0);

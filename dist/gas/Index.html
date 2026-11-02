@@ -300,7 +300,15 @@ a.btn{text-decoration:none}
 /* ===== Scolaria : noyau (constantes, utilitaires, accès aux données, données de démonstration) ===== */
 const { useState, useEffect, useMemo, useRef, useCallback, createContext, useContext, Fragment } = React;
 const html = htm.bind(React.createElement);
-const IN_GAS = typeof google !== 'undefined' && !!(google.script && google.script.run);
+/* Trois façons d'exécuter l'application :
+   - HAS_GOOGLE : la page est servie par Apps Script (google.script.run) ;
+   - serveur distant : la page est hébergée ailleurs (Firebase Hosting) et config.js définit window.SCOLARIA_API = adresse /exec du déploiement Apps Script ;
+   - démonstration : aucun serveur, données dans le navigateur.
+   IN_GAS = « un vrai serveur tient les données » (les deux premiers cas). */
+const HAS_GOOGLE = typeof google !== 'undefined' && !!(google.script && google.script.run);
+const REMOTE_WANTED = typeof window !== 'undefined' && window.SCOLARIA_API !== undefined;
+const REMOTE_URL = REMOTE_WANTED && /^https:\/\/script\.google\.com\/[\w\-./]+\/exec$/.test(String(window.SCOLARIA_API)) ? String(window.SCOLARIA_API) : '';
+const IN_GAS = HAS_GOOGLE || REMOTE_WANTED;
 
 /* Règles communes (registre des modules, droits, inscription, messages) : le même code tourne dans Code.gs */
 /* ===== Scolaria : règles métier communes à l'interface et au serveur =====
@@ -1043,7 +1051,21 @@ const lsGet = () => { try { const s = localStorage.getItem(LS_KEY); return s ? J
 const lsSet = db => { try { localStorage.setItem(LS_KEY, JSON.stringify(db)); } catch (e) { /* stockage indisponible : la démo reste en mémoire */ } };
 const lsClear = () => { try { localStorage.removeItem(LS_KEY); } catch (e) { /* ignore */ } };
 
-const gas = (fn, ...a) => new Promise((ok, ko) => google.script.run.withSuccessHandler(ok).withFailureHandler(e => ko(new Error((e && e.message) || String(e))))[fn](...a));
+/* Appel du serveur Apps Script par HTTPS. Corps en texte brut : évite la requête de pré-vérification CORS (OPTIONS) que Apps Script ne traite pas. */
+const remote = async (fn, a) => {
+  if (!REMOTE_URL) throw new Error('Adresse du serveur non configurée : renseignez l’adresse /exec du déploiement Apps Script dans config.js (voir docs/FIREBASE.md).');
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 120000);
+  let res;
+  try { res = await fetch(REMOTE_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ fn, args: a }), redirect: 'follow', credentials: 'omit', cache: 'no-store', signal: ctl.signal }); }
+  catch (e) { throw new Error(e && e.name === 'AbortError' ? 'Le serveur met trop de temps à répondre. Réessayez.' : 'Serveur injoignable. Vérifiez la connexion Internet et l’adresse du serveur dans config.js.'); }
+  finally { clearTimeout(timer); }
+  let j; try { j = await res.json(); } catch (e) { throw new Error('Réponse inattendue du serveur. Vérifiez que le déploiement Apps Script est ouvert à « Tout le monde » et que l’adresse se termine par /exec.'); }
+  if (!j || j.ok !== true) throw new Error((j && j.error) || 'Erreur du serveur.');
+  return j.data;
+};
+const gas = (fn, ...a) => HAS_GOOGLE
+  ? new Promise((ok, ko) => google.script.run.withSuccessHandler(ok).withFailureHandler(e => ko(new Error((e && e.message) || String(e))))[fn](...a))
+  : remote(fn, a);
 let TOKEN = ''; try { TOKEN = sessionStorage.getItem('scolaria-token') || ''; } catch (e) { /* ignore */ }
 const setToken = t => { TOKEN = t || ''; try { if (t) sessionStorage.setItem('scolaria-token', t); else sessionStorage.removeItem('scolaria-token'); } catch (e) { /* ignore */ } };
 const isAuthErr = e => e && /(^|\W)AUTH($|\W)/.test(e.message || '');
@@ -2707,6 +2729,7 @@ function App() {
     catch (e) { notify(e.message || String(e), 'bad'); }
   };
   const openPublicForm = async () => {
+    if (IN_GAS && !HAS_GOOGLE) { window.open(location.href.split('#')[0], '_blank', 'noopener,noreferrer'); return; }
     if (IN_GAS) { try { const url = await gas('apiAppUrl', TOKEN); window.open(url, '_blank', 'noopener,noreferrer'); } catch (e) { notify(e.message || String(e), 'bad'); } return; }
     openForm(false);
   };
