@@ -294,3 +294,6 @@ i.vchip{cursor:default;font-style:normal}
 a.btn{text-decoration:none}
 .small{font-size:.85rem}
 @media (max-width:640px){.cf-row{grid-template-columns:1fr}.reg{padding:12px 12px 36px}.chgrid,.tplgrid{grid-template-columns:1fr}.secret-row{flex-wrap:wrap}.perm-t th[scope=row]{white-space:normal}}
+.setup-card{width:min(520px,100%);text-align:left;justify-items:stretch}.setup-card .logo-mark,.setup-card>strong{justify-self:center;text-align:center}
+.setup-card code{background:var(--surface2);border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:.85em;overflow-wrap:anywhere}
+.setup-steps{margin:2px 0 6px;padding-left:1.3rem;display:grid;gap:6px;color:var(--mute)}.setup-card a.btn{justify-self:center}

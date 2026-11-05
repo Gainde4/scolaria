@@ -2,10 +2,11 @@
 
 Logiciel de gestion scolaire en français, conçu pour les écoles d'Afrique francophone : montants en FCFA, N° d'admission, notes sur 20 avec sept mentions, reçus avec le montant en lettres.
 
-Il fonctionne de trois façons à partir du même code :
+Il fonctionne de quatre façons à partir du même code :
 
-- **Démo dans le navigateur** : ouvrez `dist/index.html`. Une école fictive est chargée, les données restent dans le navigateur, et un sélecteur « Voir en tant que » permet de passer d'un rôle à l'autre.
+- **Démo dans le navigateur** : ouvrez `demo.html` (ou `dist/index.html`). Une école fictive est chargée, les données restent dans le navigateur, et un sélecteur « Voir en tant que » permet de passer d'un rôle à l'autre.
 - **Application réelle sur Google** : le classeur Google Sheets sert de base de données et Google Apps Script de serveur. Gratuit, sans hébergement. Voir [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
+- **Page sur GitHub Pages** (le plus simple, rien à installer) : l'adresse `https://<compte>.github.io/<dépôt>/` sert la page depuis la racine du dépôt ; les données restent sur Apps Script. Une démonstration est à `demo.html`. Voir [docs/GITHUB-PAGES.md](docs/GITHUB-PAGES.md).
 - **Page sur Firebase Hosting** (facultatif) : la page est servie par Firebase (adresse courte, domaine personnalisé possible, en-têtes de sécurité stricts) ; les données et le serveur restent sur Apps Script. Gratuit, sans carte bancaire. Voir [docs/FIREBASE.md](docs/FIREBASE.md).
 
 Ce projet reproduit les fonctions présentées dans la vidéo « School Management System with All Modules » (Mohammad Rameez Imdad). Le code est une réalisation originale : seule la liste des fonctions a servi de point de départ.
@@ -53,6 +54,7 @@ backend/Code.gs      Serveur Google Apps Script : authentification, droits, acc�
 build.py             Assemble tout dans dist/
 dist/index.html      Page autonome (React chargé depuis un CDN)
 dist/gas/            Dossier prêt à coller dans Apps Script
+index.html, demo.html, config.js, app.*, libs/   Site GitHub Pages (servi depuis la racine) ; config.js contient l'adresse de votre serveur, ne l'écrasez pas
 dist/firebase/       Projet Firebase Hosting prêt à publier (page, config.js, firebase.json) ; src/firebase/ contient les modèles
 tests/               Tests du serveur et de l'interface ; gas-sim.js et gas-server.js exécutent le vrai Code.gs sur des services Google simulés
 ```
@@ -65,7 +67,7 @@ L'interface est écrite en React sans étape de compilation (templates `htm`). L
 python3 build.py
 ```
 
-Le résultat est dans `dist/`. Ouvrez `dist/index.html` pour la démo, collez le contenu de `dist/gas/` dans Apps Script pour le déploiement réel, ou publiez `dist/firebase/` avec `firebase deploy --only hosting` (voir [docs/FIREBASE.md](docs/FIREBASE.md)). La version Firebase est construite seulement si `vendor/` existe (`npm install && npm run vendor`) ; elle est déjà fournie dans le dépôt.
+Le résultat est dans `dist/`. Ouvrez `demo.html` pour la démo, collez le contenu de `dist/gas/` dans Apps Script pour le déploiement réel, publiez `dist/firebase/` avec `firebase deploy --only hosting` (voir [docs/FIREBASE.md](docs/FIREBASE.md)), ou poussez la racine du dépôt sur GitHub Pages (voir [docs/GITHUB-PAGES.md](docs/GITHUB-PAGES.md)). Les versions Firebase et GitHub Pages sont construites seulement si `vendor/` existe (`npm install && npm run vendor`) ; elle est déjà fournie dans le dépôt.
 
 ## Tester
 
@@ -84,7 +86,7 @@ Si Chromium est déjà installé ailleurs, indiquez son chemin : `CHROMIUM_PATH=
 | `tests/ui_smoke.py` | Tous les écrans s'affichent pour chacun des 7 rôles, sans erreur JavaScript |
 | `tests/ui_flows.py` | Parcours métier : encaissement et reçu, appel, notes, admission, inscription en ligne, personnalisation des modules, matrice, canaux, envois |
 | `tests/ui_gas.py` | Connexion, création du premier compte, inscription publique sans connexion, changement du mot de passe provisoire, avec une fausse API `google.script.run` |
-| `tests/ui_firebase.py` | Page Firebase de bout en bout : servie avec les vrais en-têtes de sécurité de `firebase.json`, elle appelle le vrai `Code.gs` par HTTP (création du compte, import, connexion, inscription publique, un script injecté est bloqué, erreurs de configuration et de réseau) |
+| `tests/ui_firebase.py` (et `… pages`) | Page Firebase, puis page GitHub Pages (racine du dépôt, politique de sécurité en balise `meta`), de bout en bout : servie avec les vrais en-têtes de `firebase.json` ou sans en-tête, elle appelle le vrai `Code.gs` par HTTP (création du compte, import, connexion, inscription publique, un script injecté est bloqué, erreurs de configuration et de réseau) |
 
 ## Limites connues
 

@@ -1,14 +1,16 @@
-"""Test de bout en bout du déploiement Firebase Hosting.
+"""Test de bout en bout du déploiement statique : Firebase Hosting (défaut) ou GitHub Pages (« python3 tests/ui_firebase.py pages »).
 
 Chaîne réelle : navigateur → page servie avec les VRAIS en-têtes de dist/firebase/firebase.json (politique de sécurité comprise)
 → fetch POST vers l'adresse Apps Script → serveur local qui exécute le VRAI Code.gs (services Google simulés).
 Seule l'adresse script.google.com est interceptée par le test ; la redirection de Google vers script.googleusercontent.com n'est pas simulée.
 """
 from playwright.sync_api import sync_playwright
-import os, re, json, shutil, pathlib, subprocess, tempfile, threading, functools, http.server, urllib.request
+import os, re, sys, json, shutil, pathlib, subprocess, tempfile, threading, functools, http.server, urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FB = ROOT / 'dist' / 'firebase'
+MODE = sys.argv[1] if len(sys.argv) > 1 else 'firebase'   # 'firebase' : en-têtes HTTP de firebase.json ; 'pages' : racine du dépôt, aucun en-tête (comme GitHub Pages)
+assert MODE in ('firebase', 'pages')
 CHROMIUM = os.environ.get('CHROMIUM_PATH') or None
 API = 'https://script.google.com/macros/s/TEST/exec'
 ECHO = 'https://script.googleusercontent.com/macros/echo'
@@ -23,10 +25,14 @@ def gas_get(p): return json.loads(urllib.request.urlopen(gas_url(p)).read())
 
 # --- 2) site statique : copie du dossier public, config de test, en-têtes tirés de firebase.json
 tmp = pathlib.Path(tempfile.mkdtemp(prefix='fb-'))
-pub = tmp / 'public'; shutil.copytree(FB / 'public', pub)
+pub = tmp / 'public'
+if MODE == 'firebase': shutil.copytree(FB / 'public', pub)
+else:
+    pub.mkdir(); shutil.copytree(ROOT / 'libs', pub / 'libs')
+    for f in ['index.html', 'demo.html', 'config.js'] + [x.name for x in ROOT.glob('app.*')]: shutil.copy(ROOT / f, pub / f)
 (pub / 'config.js').write_text(f"window.SCOLARIA_API = '{API}';\n", encoding='utf-8')
 fbcfg = json.loads((FB / 'firebase.json').read_text(encoding='utf-8'))
-HEADERS = {h['key']: h['value'] for rule in fbcfg['hosting']['headers'] if rule['source'] == '**' for h in rule['headers']}
+HEADERS = {h['key']: h['value'] for rule in fbcfg['hosting']['headers'] if rule['source'] == '**' for h in rule['headers']} if MODE == 'firebase' else {}
 class Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a): pass
     def end_headers(self):
@@ -68,12 +74,20 @@ with sync_playwright() as p:
     # --- en-têtes et configuration de sécurité
     r = urllib.request.urlopen(SITE)
     hd = {k.lower(): v for k, v in r.headers.items()}
-    csp_h = hd.get('content-security-policy', '')
-    check('en-têtes : politique de sécurité sans script en ligne ni eval', "script-src 'self'" in csp_h and 'unsafe-inline' not in csp_h.split('style-src')[0] and 'unsafe-eval' not in csp_h, csp_h)
-    check('en-têtes : connexions limitées à Apps Script', 'connect-src https://script.google.com https://script.googleusercontent.com' in csp_h, csp_h)
-    check('en-têtes : page non intégrable dans un autre site', "frame-ancestors 'none'" in csp_h and hd.get('x-frame-options') == 'DENY')
-    check('en-têtes : nosniff et Referrer-Policy', hd.get('x-content-type-options') == 'nosniff' and hd.get('referrer-policy') == 'no-referrer')
-    html = (pub / 'index.html').read_text(encoding='utf-8')
+    page_html = (pub / 'index.html').read_text(encoding='utf-8')
+    if MODE == 'firebase':
+        csp_h = hd.get('content-security-policy', '')
+        check('en-têtes : politique de sécurité sans script en ligne ni eval', "script-src 'self'" in csp_h and 'unsafe-inline' not in csp_h.split('style-src')[0] and 'unsafe-eval' not in csp_h, csp_h)
+        check('en-têtes : connexions limitées à Apps Script', 'connect-src https://script.google.com https://script.googleusercontent.com' in csp_h, csp_h)
+        check('en-têtes : page non intégrable dans un autre site', "frame-ancestors 'none'" in csp_h and hd.get('x-frame-options') == 'DENY')
+        check('en-têtes : nosniff et Referrer-Policy', hd.get('x-content-type-options') == 'nosniff' and hd.get('referrer-policy') == 'no-referrer')
+    else:
+        m = re.search(r'<meta http-equiv="Content-Security-Policy" content="([^"]+)"', page_html); csp_m = m.group(1) if m else ''
+        check('GitHub Pages : aucun en-tête HTTP personnalisé (comme chez l’hébergeur)', 'content-security-policy' not in hd)
+        check('balise meta : politique de sécurité sans script en ligne ni eval', "script-src 'self'" in csp_m and 'unsafe-inline' not in csp_m.split('style-src')[0] and 'unsafe-eval' not in csp_m, csp_m)
+        check('balise meta : connexions limitées à Apps Script', 'connect-src https://script.google.com https://script.googleusercontent.com' in csp_m, csp_m)
+        check('balise meta : placée avant tout script ou style', page_html.index('Content-Security-Policy') < min(page_html.index('<link'), page_html.index('<script')))
+    html = page_html
     check('page : aucun script ni style en ligne', not re.search(r'<script(?![^>]*\bsrc=)', html) and '<style' not in html and ' style=' not in html)
     check('page : aucune bibliothèque chargée depuis un réseau tiers', not re.search(r'<script[^>]+src="https?://', html))
 
@@ -148,14 +162,30 @@ with sync_playwright() as p:
       setTimeout(() => res({ pwned: window.__pwned, violation: hit }), 150); })""")
     check('sécurité : un script injecté ne s’exécute pas (politique active)', blocked['pwned'] is False and blocked['violation'] is True, blocked)
 
+    if MODE == 'pages':   # pas d'en-tête X-Frame-Options sur GitHub Pages : l'application refuse elle-même de s'afficher dans un cadre
+        class Attacker(http.server.BaseHTTPRequestHandler):   # autre origine (autre port) qui intègre l'application dans un cadre
+            def log_message(self, *a): pass
+            def do_GET(self):
+                body = f'<iframe id="f" src="{SITE}" width="900" height="600"></iframe>'.encode(); self.send_response(200); self.send_header('Content-Type', 'text/html'); self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
+        atk = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Attacker); threading.Thread(target=atk.serve_forever, daemon=True).start()
+        ctxf = b.new_context(); install(ctxf); fp = ctxf.new_page(); watch(fp); fp.goto(f'http://127.0.0.1:{atk.server_address[1]}/'); fr = fp.frame_locator('#f')
+        fr.locator('.boot-card strong').first.wait_for()
+        check('cadre d’un autre site : application masquée, aucun formulaire de connexion', 'Affichage bloqué' in fr.locator('.boot-card').inner_text() and fr.locator('#lg-email').count() == 0)
+        ctxf.close(); atk.shutdown()
     # --- erreurs de configuration et de réseau, messages clairs
     ctx3 = b.new_context(); install(ctx3); bad = ctx3.new_page(); watch(bad)
     (pub / 'config.js').write_text("window.SCOLARIA_API = 'COLLEZ_ICI_ADRESSE_DU_SERVEUR/exec';\n", encoding='utf-8')
-    bad.goto(SITE); bad.wait_for_selector('.boot-card strong:has-text("Impossible")')
-    check('adresse non configurée : message explicite (jamais de bascule silencieuse en démonstration)', 'config.js' in bad.inner_text('.boot-card') and bad.locator('#role-switch').count() == 0)
+    posts0 = state['posts']
+    bad.goto(SITE); bad.wait_for_selector('.boot-card strong:has-text("pas encore connectée")')
+    check('adresse non configurée : écran d’accueil guidé (jamais de bascule silencieuse en démonstration)', 'config.js' in bad.inner_text('.boot-card') and '/exec' in bad.inner_text('.boot-card') and bad.locator('#role-switch').count() == 0 and bad.locator('#lg-email').count() == 0)
+    check('adresse non configurée : aucune requête envoyée', state['posts'] == posts0)
+    with bad.expect_navigation(): bad.get_by_role('link', name='Voir la démonstration').click()
+    bad.wait_for_selector('.shell')
+    check('démonstration (demo.html) : école fictive, sélecteur de rôle, aucune requête serveur', bad.locator('#role-switch').count() == 1 and state['posts'] == posts0 and bad.url.endswith('/demo.html'))
+    bad.goto(SITE); bad.wait_for_selector('.boot-card strong:has-text("pas encore connectée")')
     (pub / 'config.js').write_text("window.SCOLARIA_API = 'https://evil.example.com/steal/exec';\n", encoding='utf-8')
-    bad.reload(); bad.wait_for_selector('.boot-card strong:has-text("Impossible")')
-    check('adresse hors Google refusée : aucune requête envoyée', 'config.js' in bad.inner_text('.boot-card'))
+    bad.reload(); bad.wait_for_selector('.boot-card strong:has-text("pas encore connectée")')
+    check('adresse hors Google refusée : aucune requête envoyée', 'config.js' in bad.inner_text('.boot-card') and state['posts'] == posts0)
     (pub / 'config.js').write_text(f"window.SCOLARIA_API = '{API}';\n", encoding='utf-8')
     state['mode'] = 'down'; bad.reload(); bad.wait_for_selector('.boot-card strong:has-text("Impossible")')
     check('serveur injoignable : message clair', 'injoignable' in bad.inner_text('.boot-card'))

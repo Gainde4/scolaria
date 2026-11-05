@@ -10,6 +10,8 @@ const HAS_GOOGLE = typeof google !== 'undefined' && !!(google.script && google.s
 const REMOTE_WANTED = typeof window !== 'undefined' && window.SCOLARIA_API !== undefined;
 const REMOTE_URL = REMOTE_WANTED && /^https:\/\/script\.google\.com\/[\w\-./]+\/exec$/.test(String(window.SCOLARIA_API)) ? String(window.SCOLARIA_API) : '';
 const IN_GAS = HAS_GOOGLE || REMOTE_WANTED;
+/* Une page hébergée sur GitHub Pages ne peut pas envoyer l'en-tête qui interdit de l'afficher dans le cadre d'un autre site (clickjacking) : l'application refuse donc de s'afficher dans un cadre. */
+const FRAMED = REMOTE_WANTED && (() => { try { return window.top !== window.self; } catch (e) { return true; } })();
 
 /* Règles communes (registre des modules, droits, inscription, messages) : le même code tourne dans Code.gs */
 /*__SHARED__*/

@@ -12,7 +12,7 @@ Ce que cela apporte : une adresse courte et propre à communiquer aux familles, 
 
 La page pèse environ 140 Ko une fois compressée : le plan gratuit (360 Mo de transfert par jour) couvre plus de 2 000 premières visites par jour, les visites suivantes utilisant le cache du navigateur.
 
-Compter 20 à 30 minutes.
+Compter 20 à 30 minutes. Plus simple et sans ligne de commande : [GITHUB-PAGES.md](GITHUB-PAGES.md).
 
 ## Avant de commencer
 

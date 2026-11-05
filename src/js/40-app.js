@@ -71,6 +71,7 @@ function App() {
   };
   const toLogin = () => Api.status().then(i => { setLoginInfo(i); setBoot('login'); }).catch(e => { setBootErr(e.message || String(e)); setBoot('error'); });
   const load = useCallback(() => {
+    if (REMOTE_WANTED && !REMOTE_URL) { setBoot('unconfigured'); return; }
     setBoot('loading');
     if (IN_GAS && !Api.hasToken()) { toLogin(); return; }
     Api.load().then(r => { if (!r.me) { setDb(r.db); setBoot('denied'); return; } enter(r); })
@@ -161,6 +162,11 @@ function App() {
       makeChallenge=${IN_GAS ? Api.challenge : () => Promise.resolve({ id: 'demo', q: '2 + 3' })} run=${IN_GAS ? (f => Api.register(f, reg.connected)) : demoRun(reg.connected)}
       onBack=${() => setReg(null)} onEnter=${enterAfter} /><${Toasts} list=${toasts} /><//>`;
   }
+  if (FRAMED) return html`<div className="boot"><div className="boot-card"><div className="logo-mark">S</div><strong>Affichage bloqué</strong><p className="muted">Pour votre sécurité, Scolaria ne s’affiche pas à l’intérieur d’un autre site. Ouvrez-la directement dans une nouvelle fenêtre.</p><a className="btn primary" href=${location.href} target="_blank" rel="noopener noreferrer">Ouvrir Scolaria</a></div></div>`;
+  if (boot === 'unconfigured') return html`<div className="boot"><div className="boot-card setup-card"><div className="logo-mark">S</div><strong>Scolaria n’est pas encore connectée à un serveur</strong>
+    <p className="muted">La page est prête, mais l’adresse du serveur Google Apps Script n’est pas (ou plus) valide dans le fichier <code>config.js</code>. Elle doit commencer par <code>https://script.google.com/</code> et se terminer par <code>/exec</code>.</p>
+    <ol className="setup-steps"><li>Déployez le serveur Apps Script (dossier <code>dist/gas</code> du dépôt) et copiez l’adresse « Application Web ».</li><li>Collez-la dans <code>config.js</code>, à la place du texte d’exemple, puis enregistrez la modification.</li><li>Patientez environ une minute, puis rechargez cette page.</li></ol>
+    <a className="btn primary" href="demo.html">Voir la démonstration</a></div></div>`;
   if (boot === 'loading') return html`<div className="boot"><div className="boot-card"><div className="logo-mark">S</div><strong>Scolaria</strong><span className="muted">Chargement des données…</span><div className="loadbar"><i></i></div></div></div>`;
   if (boot === 'login') return html`<${LoginScreen} info=${loginInfo} onDone=${load} onRegister=${() => setBoot('register')} />`;
   if (boot === 'register') return html`<${Fragment}><${RegisterScreen} info=${loginInfo.registration} connected=${false} schoolName=${loginInfo.school} indicatif=${loginInfo.registration.indicatif}
