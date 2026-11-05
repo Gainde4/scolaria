@@ -25,11 +25,18 @@ Ces fichiers sont à la racine du dépôt (c'est ce que GitHub Pages sert) :
 
 ## Étapes
 
-### 1. Déployer le serveur Apps Script
+### 1. Créer le serveur Apps Script (10 minutes)
 
-Suivez [DEPLOIEMENT.md](DEPLOIEMENT.md) avec le `Code.gs` de ce dépôt (dossier `dist/gas/`) et l'accès **« Tout le monde »**. Si vous l'aviez déjà déployé avant la version Firebase/Pages, **remplacez le code** puis créez une **nouvelle version** : Déployer → Gérer les déploiements → crayon → Version : Nouvelle version → Déployer. L'adresse ne change pas. Sans cela, l'ancien code répond encore et le site ne peut pas l'utiliser.
+Pas besoin de Google Sheets ni de la page `Index` : le serveur crée lui-même son classeur « Scolaria — données » dans votre Drive au premier appel.
 
-Copiez l'adresse « Application Web » (elle se termine par `/exec`). Vérifiez-la en ouvrant cette adresse suivie de `?ping=1` dans le navigateur : vous devez voir `{"ok":true,"app":"Scolaria"}`.
+1. Ouvrez <https://script.google.com> et cliquez sur **Nouveau projet**. Donnez-lui un nom (« Scolaria »).
+2. Supprimez le code d'exemple et collez **tout** le contenu de `Code.gs` (dossier `dist/gas/` du dépôt, ou l'archive `scolaria-apps-script.zip`). Enregistrez (Ctrl + S).
+3. *Recommandé* : roue dentée **Paramètres du projet** → cochez « Afficher le fichier manifeste appsscript.json », puis remplacez le contenu de ce fichier par celui de `appsscript.json` (fuseau horaire Dakar, droits demandés).
+4. **Déployer → Nouveau déploiement** → roue dentée → **Application Web**. *Exécuter en tant que* : **Moi**. *Qui a accès* : **Tout le monde** (l'application a sa propre connexion par mot de passe). Cliquez sur **Déployer**.
+5. **Autorisez l'accès** quand Google le demande. Un écran « Google n'a pas validé cette application » apparaît : c'est normal, vous en êtes l'auteur. Cliquez sur **Paramètres avancés → Accéder à Scolaria (non sécurisé) → Autoriser**.
+6. Copiez l'**URL de l'application Web** (elle se termine par `/exec`). Vérifiez-la en ouvrant cette adresse suivie de `?ping=1` dans le navigateur : vous devez voir `{"ok":true,"app":"Scolaria"}`.
+
+Si vous aviez déjà déployé une version précédente : remplacez le code, puis **Déployer → Gérer les déploiements → crayon → Version : Nouvelle version → Déployer**. L'adresse ne change pas. Sans nouvelle version, l'ancien code répond encore et le site ne peut pas l'utiliser.
 
 ### 2. Coller l'adresse dans `config.js`, sur GitHub
 

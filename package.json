@@ -6,7 +6,7 @@
   "scripts": {
     "vendor": "node scripts/vendor.js",
     "build": "python3 build.py",
-    "test:backend": "node tests/backend.test.js",
+    "test:backend": "node tests/backend.test.js && node tests/standalone.test.js",
     "test:ui": "python3 tests/ui_smoke.py && python3 tests/ui_flows.py && python3 tests/ui_gas.py && python3 tests/ui_firebase.py && python3 tests/ui_firebase.py pages",
     "deploy:firebase": "cd dist/firebase && firebase deploy --only hosting",
     "test": "npm run vendor && npm run build && npm run test:backend && npm run test:ui"

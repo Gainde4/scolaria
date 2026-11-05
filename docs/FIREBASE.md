@@ -16,7 +16,7 @@ Compter 20 à 30 minutes. Plus simple et sans ligne de commande : [GITHUB-PAGES.
 
 ## Avant de commencer
 
-1. Le serveur Apps Script doit être déployé comme dans [DEPLOIEMENT.md](DEPLOIEMENT.md), avec l'accès **« Tout le monde »**.
+1. Le serveur Apps Script doit être déployé avec l'accès **« Tout le monde »** : la façon la plus simple (script autonome, sans Google Sheets à créer) est décrite à l'étape 1 de [GITHUB-PAGES.md](GITHUB-PAGES.md#1-créer-le-serveur-apps-script-10-minutes) ; l'ancienne méthode est dans [DEPLOIEMENT.md](DEPLOIEMENT.md).
 2. **Mettez-le à jour** avec le `Code.gs` de ce dépôt (dossier `dist/gas/`) : il contient la nouvelle porte d'entrée `doPost`, nécessaire à Firebase. Dans l'éditeur Apps Script, remplacez tout le contenu de `Code.gs`, enregistrez, puis **Déployer → Gérer les déploiements → crayon → Version : Nouvelle version → Déployer**. L'adresse ne change pas. Sans cette nouvelle version, le serveur continue de répondre avec l'ancien code.
 3. Copiez l'adresse « Application Web » qui se termine par `/exec`.
 4. Vérifiez-la : ouvrez cette adresse suivie de `?ping=1` dans un navigateur. Vous devez voir `{"ok":true,"app":"Scolaria"}`.

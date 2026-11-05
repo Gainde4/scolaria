@@ -2,7 +2,8 @@
    Sert aux tests de bout en bout : le navigateur parle à un serveur HTTP local qui exécute doPost du vrai code, sans réseau Google. */
 const vm = require('vm'), fs = require('fs'), path = require('path'), crypto = require('crypto');
 const ROOT = path.join(__dirname, '..');
-function createGas() {
+function createGas(opts) {
+  opts = opts || {};
   const sheets = {}; const mails = []; const cache = {}; const props = {}; const fetches = []; const stats = { formats: 0, reads: 0, writes: 0 };
   let quota = 100, fetchReply = () => ({ code: 201, body: '{"sid":"SM1"}' });
   function mkSheet(name) {
@@ -43,6 +44,12 @@ function createGas() {
   };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'dist/gas/Code.gs'), 'utf8'), ctx);
-  return { ctx, sheets, mails, props, fetches, cache };
+  const created = [], opened = [];
+  if (opts.standalone) {   // script créé hors d'un classeur : pas de classeur actif, il crée le sien
+    book.getId = () => 'sheet-123';
+    ctx.SpreadsheetApp = { getActiveSpreadsheet: () => null, create: name => { created.push(name); return book; }, openById: id => { opened.push(id); return book; } };
+    ctx.LockService = { getScriptLock: () => { let held = false; return { hasLock: () => held, waitLock() { held = true; }, releaseLock() { held = false; } }; } };
+  }
+  return { ctx, sheets, mails, props, fetches, cache, created, opened };
 }
 module.exports = { createGas };

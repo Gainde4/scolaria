@@ -82,6 +82,7 @@ Si Chromium est déjà installé ailleurs, indiquez son chemin : `CHROMIUM_PATH=
 
 | Test | Ce qu'il vérifie |
 |---|---|
+| `tests/standalone.test.js` | Serveur Apps Script autonome (sans classeur lié) : il crée son classeur une seule fois, le rouvre ensuite, et répond sans page `Index` |
 | `tests/backend.test.js` | `Code.gs` (y compris la porte d'entrée HTTP `doPost` et sa liste blanche de fonctions) face à une simulation de l'API Google (classeur, cache, courrier, réseau Twilio et passerelle) : connexion et blocage, filtrage des données par rôle, matrice d'autorisations, inscription publique, admission et comptes automatiques, champs personnalisés, canaux et clés d'API, quotas, performances |
 | `tests/ui_smoke.py` | Tous les écrans s'affichent pour chacun des 7 rôles, sans erreur JavaScript |
 | `tests/ui_flows.py` | Parcours métier : encaissement et reçu, appel, notes, admission, inscription en ligne, personnalisation des modules, matrice, canaux, envois |

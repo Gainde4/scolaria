@@ -510,9 +510,10 @@ const EVENTS = {
 /* ================= Page web ================= */
 function doGet(e) {
   if (e && e.parameter && e.parameter.ping) return json_({ ok: true, app: 'Scolaria' }); // vérification de l'adresse depuis un navigateur
-  return HtmlService.createHtmlOutputFromFile('Index')
-    .setTitle('Scolaria')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  var page;
+  try { page = HtmlService.createHtmlOutputFromFile('Index'); }
+  catch (err) { return json_({ ok: true, app: 'Scolaria', info: 'Serveur actif. La page de l’application est hébergée ailleurs (GitHub Pages, Firebase).' }); }
+  return page.setTitle('Scolaria').addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
 /* ================= Point d'entrée HTTP =================
@@ -551,10 +552,19 @@ function cols_(t) { return COLS_[t]; }
 function types_(t) { return TYPES_[t]; }
 function ss_() {
   var s = SpreadsheetApp.getActiveSpreadsheet();
-  if (s) return s;
-  var id = PropertiesService.getScriptProperties().getProperty('SHEET_ID');
-  if (!id) throw new Error('Aucun classeur lié. Créez le script depuis Extensions > Apps Script dans un Google Sheets.');
-  return SpreadsheetApp.openById(id);
+  if (s) return s;                                        // script créé depuis un classeur (Extensions > Apps Script)
+  var props = PropertiesService.getScriptProperties(), id = props.getProperty('SHEET_ID');
+  if (id) return SpreadsheetApp.openById(id);
+  // Script autonome (créé sur script.google.com) : il crée son classeur au premier appel, dans le Drive de la personne qui a déployé.
+  var lock = LockService.getScriptLock(), had = lock.hasLock();
+  if (!had) lock.waitLock(20000);
+  try {
+    id = props.getProperty('SHEET_ID');                   // un autre appel a pu le créer pendant l'attente
+    if (id) return SpreadsheetApp.openById(id);
+    var created = SpreadsheetApp.create('Scolaria — données');
+    props.setProperty('SHEET_ID', created.getId());
+    return created;
+  } finally { if (!had) lock.releaseLock(); }
 }
 function book_() { if (!BOOK_) BOOK_ = ss_(); return BOOK_; }
 function sheets_() { if (!SHEETS_) { SHEETS_ = {}; book_().getSheets().forEach(function (s) { SHEETS_[s.getName()] = s; }); } return SHEETS_; }

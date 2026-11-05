@@ -12,7 +12,9 @@ Gestion scolaire complète : la base de données est un classeur Google Sheets, 
 6. **Déployer > Nouveau déploiement > Application Web**
    - Exécuter en tant que : **Moi**
    - Qui a accès : **Tout le monde** (l'application a sa propre connexion par mot de passe)
-7. Autorisez l'accès à votre compte Google quand on vous le demande, puis ouvrez l'adresse qui se termine par `/exec`.
+7. Autorisez l'accès à votre compte Google quand on vous le demande. Un écran « Google n'a pas validé cette application » apparaît : c'est normal, vous en êtes l'auteur. Cliquez sur **Paramètres avancés > Accéder à … (non sécurisé) > Autoriser**. Puis ouvrez l'adresse qui se termine par `/exec`.
+
+Si la page de l'application est hébergée ailleurs (GitHub Pages ou Firebase), le serveur peut aussi être un script autonome créé sur script.google.com, sans classeur ni fichier `Index` : voir [GITHUB-PAGES.md](GITHUB-PAGES.md).
 
 ## Premier démarrage
 
